@@ -6,7 +6,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/cli/run-node.sh\" \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/cli/starmemory.mjs\" sync --background"
+            "command": "case \"${CLAUDE_CODE_REMOTE:-}:${CLAUDE_CODE_ENTRYPOINT:-}\" in true:*|*:remote_cowork*) ;; *) sh \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/cli/run-node.sh\" \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/cli/starmemory.mjs\" sync --background ;; esac"
+          },
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/reminder.sh\" session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/hooks/reminder.sh\" prompt",
+            "timeout": 10
           }
         ]
       }

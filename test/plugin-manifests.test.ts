@@ -63,6 +63,23 @@ describe('hooks.json', () => {
       expect(group.matcher.split('|')).toEqual(expect.arrayContaining(['startup', 'resume', 'clear', 'compact']));
     }
   });
+
+  // Behaviour is in test/hooks.test.ts; this is the wiring.
+  it('runs the reminder at session start and on prompts, from the script that ships', () => {
+    const hooks = read('hooks/hooks.json').hooks;
+    const reminders = (event: string) =>
+      hooks[event].flatMap((g: { hooks: { command: string }[] }) => g.hooks.map((h) => h.command)).filter((c: string) => c.includes('/hooks/reminder.sh'));
+
+    expect(reminders('SessionStart')).toEqual([expect.stringMatching(/reminder\.sh" session-start$/)]);
+    expect(reminders('UserPromptSubmit')).toEqual([expect.stringMatching(/reminder\.sh" prompt$/)]);
+    for (const command of reminders('UserPromptSubmit')) expect(command).toContain('${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}');
+    expect(fs.existsSync(path.join(root, 'hooks', 'reminder.sh'))).toBe(true);
+  });
+
+  it('keeps the sync out of a Cowork container, or any cloud container, before anything looks for node', () => {
+    const sync = read('hooks/hooks.json').hooks.SessionStart[0].hooks.find((h: { command: string }) => h.command.includes('starmemory.mjs'));
+    expect(sync.command.startsWith('case "${CLAUDE_CODE_REMOTE:-}:${CLAUDE_CODE_ENTRYPOINT:-}" in true:*|*:remote_cowork*) ;; *) sh ')).toBe(true);
+  });
 });
 
 describe('local Codex marketplace', () => {
