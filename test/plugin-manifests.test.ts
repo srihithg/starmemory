@@ -27,6 +27,36 @@ describe('Codex plugin manifest', () => {
   it('shares the hooks file with Claude Code, so a sync is one command in both', () => {
     expect(manifest().hooks).toBe('./hooks/hooks.json');
   });
+
+  it('points at the skills folder Claude Code finds on its own at the plugin root', () => {
+    expect(manifest().skills).toBe('./skills/');
+    expect(fs.existsSync(path.join(root, manifest().skills, 'starmemory', 'SKILL.md'))).toBe(true);
+  });
+});
+
+describe('the starmemory skill', () => {
+  const text = () => fs.readFileSync(path.join(root, 'skills', 'starmemory', 'SKILL.md'), 'utf8');
+  const frontmatter = () => {
+    const block = text().match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+    return Object.fromEntries(block.split('\n').map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
+  };
+
+  it('is named starmemory, the name the start-up reminder tells the model to load', () => {
+    expect(frontmatter().name).toBe('starmemory');
+    expect(fs.readFileSync(path.join(root, 'hooks', 'reminder.sh'), 'utf8')).toContain('load the starmemory skill');
+  });
+
+  it('has a description that says when to use it, short enough for a skill listing', () => {
+    const description = frontmatter().description;
+    expect(description.length).toBeGreaterThan(100);
+    expect(description.length).toBeLessThanOrEqual(1024);
+    for (const trigger of ['last time', 'we discussed', 'Cowork', 'not to record']) expect(description).toContain(trigger);
+  });
+
+  // test/mcp-cowork.test.ts pins these as the server's tool list.
+  it('names the four tools the server registers', () => {
+    for (const tool of ['search', 'read', 'remember', 'forget']) expect(text()).toContain(`\`${tool}\``);
+  });
 });
 
 describe('.mcp.json (read by Codex)', () => {
