@@ -141,6 +141,37 @@ describe('the MCP server in Cowork use', () => {
 });
 
 describe('read', () => {
+  it('opens only transcripts and archive copies, never another file on this computer', async () => {
+    const secret = path.join(dir, 'claude_desktop_config.json');
+    fs.writeFileSync(secret, '{"env":{"TOKEN":"sk-verysecret"}}');
+    const outside = path.join(dir, 'elsewhere', 'notes.jsonl');
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.writeFileSync(outside, '{"type":"user","message":{"role":"user","content":"private"}}\n');
+    // A link inside an indexed folder that leads out of it.
+    const projects = path.join(dir, 'claude', 'projects', '-Users-me-lanterns');
+    fs.mkdirSync(projects, { recursive: true });
+    const link = path.join(projects, 'link.jsonl');
+    // A folder link, with `..` after it: the system follows the link first,
+    // so this names elsewhere/notes.jsonl, though read as text it names a
+    // notes.jsonl beside the link.
+    const moved = path.join(projects, 'moved');
+    fs.mkdirSync(path.join(dir, 'elsewhere', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(projects, 'notes.jsonl'), '{"type":"user","message":{"role":"user","content":"inside"}}\n');
+    const links = process.platform === 'win32' ? [] : [link, `${moved}${path.sep}..${path.sep}notes.jsonl`];
+    if (process.platform !== 'win32') {
+      fs.symlinkSync(outside, link);
+      fs.symlinkSync(path.join(dir, 'elsewhere', 'deep'), moved);
+    }
+
+    for (const target of [secret, outside, `${path.join(dir, 'archive')}${path.sep}..${path.sep}elsewhere${path.sep}notes.jsonl`, ...links]) {
+      const result = await call('read', { path: target });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain('reads only the transcripts it indexes');
+      expect(result.text).not.toContain('sk-verysecret');
+      expect(result.text).not.toContain('private');
+    }
+  });
+
   it('refuses a forgotten Codex session, whose file is named after something else', async () => {
     const id = '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001';
     const rollout = path.join(dir, 'codex', 'sessions', '2026', '09', '28', `rollout-2026-09-28T10-00-00-${id}.jsonl`);

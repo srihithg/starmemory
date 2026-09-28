@@ -25,6 +25,7 @@ import { search, searchMultipleConcepts } from './search.js';
 import { LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, describeRemember, remember } from './cowork.js';
 import { defaultForgottenPath, describeForget, forget, readForgotten } from './forget.js';
 import { sessionIdsOf } from './parser.js';
+import { defaultTranscriptDirs } from './sync.js';
 import { canStartSync, createSyncTrigger } from './sync-trigger.js';
 import { HARNESSES } from './types.js';
 
@@ -58,6 +59,37 @@ function syncOnHoldNote(what: string): string {
     `\nOn hold: ${what}. The copy of starmemory this server started from has been removed, as a plugin update does, ` +
     'so it cannot start a sync. The next sync does it: the next Claude Code session on this computer, or the next remember or forget once the Claude app has been restarted.'
   );
+}
+
+/** Where `read` opens files: the archive, and the folders sync indexes (the
+ * Cowork records among them). A Cowork session reaches this server from the
+ * cloud, and what it reads there can steer it, so a path it passes is not
+ * taken on trust to be one that search returned. */
+const READ_ROOTS = [ARCHIVE_ROOT, ...defaultTranscriptDirs()];
+const TRANSCRIPT_NAME = /\.jsonl(\.gz)?$/;
+
+/** The file the system opens for `p`. The native call resolves each link as
+ * the kernel does, before any `..` after it; fs.realpathSync would drop the
+ * `..` first and so could name a different file than the one read. */
+function realpathOf(p: string): string | undefined {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A transcript's name, under one of READ_ROOTS. `file` is checked as written,
+ * or resolved (realpathOf) on both sides when it is what will be read. */
+function isReadable(filePath: string, { resolved }: { resolved: boolean }): boolean {
+  const file = resolved ? filePath : path.resolve(filePath);
+  if (!TRANSCRIPT_NAME.test(file)) return false;
+  return READ_ROOTS.some((root) => {
+    const base = resolved ? realpathOf(root) : path.resolve(root);
+    if (!base) return false;
+    const relative = path.relative(base, file);
+    return relative !== '' && relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative);
+  });
 }
 
 
@@ -116,6 +148,11 @@ server.registerTool(
     },
   },
   async ({ path: requested, startLine, endLine }) => {
+    const refused = {
+      content: [{ type: 'text' as const, text: `starmemory reads only the transcripts it indexes and its archive copies of them, and ${requested} is neither.` }],
+      isError: true,
+    };
+    if (!isReadable(requested, { resolved: false })) return refused;
     // A path from an older result may name a source transcript Claude Code has
     // since cleaned up; the archive keeps a copy under every harness.
     let filePath = requested;
@@ -135,12 +172,15 @@ server.registerTool(
         isError: true,
       };
     }
+    // What is checked is what is read: the resolved file, not the path as given.
+    const real = realpathOf(filePath);
+    if (!real || !isReadable(real, { resolved: true })) return refused;
     // Between a forget and the sync that deletes the rest, a path from an
     // earlier result, a Claude Code or Codex transcript among them, still
     // opens. It must not.
-    const text = readArchive(filePath);
+    const text = readArchive(real);
     const forgotten = forgottenNow();
-    const sessions = [...(await sessionIdsOf(filePath, text))];
+    const sessions = [...(await sessionIdsOf(real, text)), ...(await sessionIdsOf(filePath, ''))];
     if (sessions.some((session) => forgotten.has(session))) {
       return { content: [{ type: 'text', text: 'The user asked to forget that session, so it is not shown.' }], isError: true };
     }
