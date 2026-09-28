@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// CLI entry -- `starmemory sync`, `starmemory search <query>`, `starmemory mcp-server`.
+// CLI entry -- `starmemory sync`, `starmemory search <query>`, `starmemory mcp-server`,
+// `starmemory desktop-install`.
 // Mirrors episodic-memory's cli/ commands closely enough that hooks.json needs
 // no restructuring beyond swapping the invoked script.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openStore } from './store.js';
 import { VectorIndex } from './vector-index.js';
 import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
@@ -87,7 +89,14 @@ async function main() {
         await import('./mcp-server.js');
         return;
     }
-    console.error('Usage: starmemory <sync [--background] [--cowork-only] | search <query> | mcp-server>');
+    if (command === 'desktop-install') {
+        // Plain node under cli/, shared with cli/starmemory.mjs, which runs it
+        // before any dependency is installed.
+        const entry = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'desktop-install.mjs')).href;
+        const { main: install } = (await import(entry));
+        process.exit(await install(rest));
+    }
+    console.error('Usage: starmemory <sync [--background] [--cowork-only] | search <query> | mcp-server | desktop-install [--name <name>] [--replace] [--restart]>');
     process.exit(1);
 }
 main().catch((err) => {

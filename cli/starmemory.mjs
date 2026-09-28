@@ -25,6 +25,15 @@ const args = process.argv.slice(2);
 const background = args.includes('--background');
 const detached = args.includes('--detached');
 
+// Registering with the Claude desktop app runs before the dependency install:
+// it is plain node, and it is often the first thing run from a fresh copy
+// (README, "Use it in Cowork"). It installs the dependencies itself, for the
+// copy the app will start.
+if (args[0] === 'desktop-install') {
+  const { main } = await import('./desktop-install.mjs');
+  process.exit(await main(args.slice(1)));
+}
+
 export function syncLogPath() {
   return process.env.STARMEMORY_LOG_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'sync.log');
 }
