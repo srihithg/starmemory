@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { archivePathFor, copyIfChanged, defaultArchiveRoot, readArchive, resolveArchivePath, summaryPathFor } from '../src/archive.js';
+import readline from 'node:readline';
+import { archivePathFor, copyIfChanged, defaultArchiveRoot, openArchive, readArchive, resolveArchivePath, summaryPathFor } from '../src/archive.js';
 
 let dir: string;
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'starmemory-archive-')); });
@@ -52,6 +53,15 @@ describe('copyIfChanged', () => {
     const src = path.join(dir, 'src.jsonl'); fs.writeFileSync(src, 'one\n');
     await copyIfChanged(src, path.join(dir, 'out', 'src.jsonl.gz'));
     expect(fs.readdirSync(path.join(dir, 'out'))).toEqual(['src.jsonl.gz']);
+  });
+});
+
+describe('openArchive', () => {
+  it('hands a missing copy\'s error to the reader instead of ending the process', async () => {
+    // A copy `forget` removed between being listed and being read.
+    const lines = readline.createInterface({ input: openArchive(path.join(dir, 'gone.jsonl.gz')), crlfDelay: Infinity });
+
+    await expect((async () => { for await (const line of lines) void line; })()).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

@@ -4,7 +4,9 @@ import { VectorIndex } from './vector-index.js';
 import { TextIndex } from './text-index.js';
 /** Where each harness keeps its transcripts. The overrides are the ones the
  * harnesses themselves honour, so a profile that moved its config dir still
- * gets indexed. Missing directories are fine: walkJsonlFiles yields nothing. */
+ * gets indexed. Missing directories are fine: walkJsonlFiles yields nothing.
+ * Cowork writes nothing to this machine, so its entry is the records the
+ * `remember` tool keeps (src/cowork.ts). */
 export declare function defaultTranscriptDirs(env?: NodeJS.ProcessEnv): string[];
 /** Which embedding model every vector in the store came from. */
 export declare const EMBEDDING_MODEL_KEY = "embedding_model";
@@ -55,7 +57,28 @@ export interface SyncOptions {
         now?: number;
         log?: (line: string) => void;
     };
+    /** The list of sessions the user asked to forget (src/forget.ts). Tests point
+     * this at a temp file; the default is ~/.config/starmemory/forgotten.txt. */
+    forgottenPath?: string;
+    /** Where Cowork records live (src/cowork.ts). A record past the TTL is
+     * starmemory's own file and is deleted with its rows. Defaults to
+     * defaultCoworkRoot(). */
+    coworkRoot?: string;
+    /** How long this sync may wait for the text-index writer when another
+     * process holds it and this one has deletions or new rows the index needs.
+     * Tantivy keeps the writer until the process exits, so without waiting a
+     * forget or a new entry would be left to some later sync, which in Cowork
+     * can be days away. Only a sync running detached in the background waits,
+     * since nobody waits on it; 0, the default, never waits (design doc §09). */
+    writerWaitMs?: number;
+    /** Where deletions are reported; stderr, which is sync.log, by default. */
+    log?: (line: string) => void;
 }
+/** What a detached sync waits for the text-index writer, at most. The holder
+ * may be minutes into its summary step, but it takes on what arrived meanwhile
+ * before it exits (see syncAll), so this only has to outlast a holder that is
+ * about to exit. */
+export declare const WRITER_WAIT_MS = 30000;
 export interface SyncResult {
     filesScanned: number;
     exchangesIndexed: number;
@@ -71,6 +94,13 @@ export interface SyncResult {
     expiredFiles: number;
     /** True when expiry was skipped because another process held the text writer. */
     expireSkipped: boolean;
+    /** Rows removed because the user asked to forget their session. */
+    forgotten: number;
+    /** Conversations (files) removed for the same reason. */
+    forgottenFiles: number;
+    /** True when rows of forgotten sessions are still stored, left to the next
+     * sync because another process held the text writer throughout. */
+    forgetSkipped: boolean;
     /** Vectors recomputed because the embedding model changed (see ensureEmbeddingModel). */
     reembedded: number;
     /** Documents added to the BM25 index this run. */

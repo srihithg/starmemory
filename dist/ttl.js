@@ -4,7 +4,7 @@
 // and the summary all go together, so a search never returns something that
 // cannot be opened. Design doc archive-and-summaries §13.
 import fs from 'node:fs';
-import { archivePathFor, summaryPathFor } from './archive.js';
+import { ARCHIVE_SUFFIX, archivePathFor, summaryPathFor } from './archive.js';
 import { deleteExchanges, exchangesFrom } from './store.js';
 export const DEFAULT_TTL_DAYS = 180;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -33,7 +33,7 @@ function lastActivityMs(group, archiveRoot) {
     }
     return group.latestTimestampMs;
 }
-function groupByFile(rows) {
+export function groupByFile(rows) {
     const groups = new Map();
     for (const r of rows) {
         const g = groups.get(r.archivePath) ?? {
@@ -49,30 +49,61 @@ function groupByFile(rows) {
     }
     return [...groups.values()];
 }
-/** Remove every conversation whose last activity is older than the TTL. Holds
- * the text writer for the duration when a text index is given; if another
- * process has it, nothing is removed this run and the next sync tries again. */
-export function expireOldConversations(store, textIndex, { ttlDays = defaultTtlDays(), now = Date.now(), archiveRoot, log = () => { } }) {
+/** Remove whole conversations everywhere: the rows and their vectors, their
+ * text-index documents, the archive copy and its summary, so a search never
+ * returns something that cannot be opened. Holds the text writer for the
+ * duration when a text index is given; if another process has it, nothing is
+ * removed this run and the next sync tries again. Shared by the TTL and by
+ * forgetting a session (src/forget.ts). */
+export function removeConversations(store, textIndex, groups, { archiveRoot, log = () => { }, describe, onRemoved, }) {
     const result = { rows: 0, files: 0, skipped: false };
-    if (ttlDays <= 0)
-        return result;
-    const cutoff = ttlCutoffMs(ttlDays, now);
-    const expired = groupByFile(exchangesFrom(store, 0)).filter((g) => lastActivityMs(g, archiveRoot) < cutoff);
-    if (expired.length === 0)
+    if (groups.length === 0)
         return result;
     if (textIndex && !textIndex.tryAcquireWriter()) {
         result.skipped = true;
         return result;
     }
-    for (const g of expired) {
-        result.rows += deleteExchanges(store, g.ids);
-        textIndex?.deleteExchanges(g.ids);
-        const copy = archivePathFor(archiveRoot, g.harness, g.project, g.archivePath);
-        for (const file of new Set([copy, summaryPathFor(copy)]))
-            fs.rmSync(file, { force: true });
-        result.files++;
-        log(`starmemory: expired ${g.archivePath} (${g.ids.length} exchanges, quiet for more than ${ttlDays} days)`);
+    try {
+        for (const g of groups) {
+            result.rows += deleteExchanges(store, g.ids);
+            textIndex?.deleteExchanges(g.ids);
+            const copy = archivePathFor(archiveRoot, g.harness, g.project, g.archivePath);
+            // The copy the rows point at goes too, when it is not the one under the
+            // current archive root (STARMEMORY_ARCHIVE_PATH moved). A `.gz` is always
+            // a copy of ours; rows from before the archive point at the transcript,
+            // which is never touched.
+            const pointed = g.archivePath.endsWith(ARCHIVE_SUFFIX) ? [g.archivePath, summaryPathFor(g.archivePath)] : [];
+            for (const file of new Set([copy, summaryPathFor(copy), ...pointed])) {
+                try {
+                    fs.rmSync(file, { force: true });
+                }
+                catch (error) {
+                    // An old root on a disk now read-only, say. The rows are gone
+                    // already, and their text-index documents must still go.
+                    log(`starmemory: could not remove ${file}: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            onRemoved?.(g);
+            result.files++;
+            log(`starmemory: ${describe(g)}`);
+        }
     }
-    textIndex?.commit();
+    finally {
+        // Whatever went wrong, the documents of the rows already deleted go too:
+        // no later sync could find them, with no rows left to point at them.
+        textIndex?.commit();
+    }
     return result;
+}
+/** Remove every conversation whose last activity is older than the TTL. */
+export function expireOldConversations(store, textIndex, { ttlDays = defaultTtlDays(), now = Date.now(), archiveRoot, log = () => { } }) {
+    if (ttlDays <= 0)
+        return { rows: 0, files: 0, skipped: false };
+    const cutoff = ttlCutoffMs(ttlDays, now);
+    const expired = groupByFile(exchangesFrom(store, 0)).filter((g) => lastActivityMs(g, archiveRoot) < cutoff);
+    return removeConversations(store, textIndex, expired, {
+        archiveRoot,
+        log,
+        describe: (g) => `expired ${g.archivePath} (${g.ids.length} exchanges, quiet for more than ${ttlDays} days)`,
+    });
 }

@@ -33,7 +33,7 @@ if (background && !detached) {
   const log = syncLogPath();
   fs.mkdirSync(path.dirname(log), { recursive: true });
   const fd = fs.openSync(log, 'a');
-  fs.writeSync(fd, `[${new Date().toISOString()}] hook pid ${process.pid}: starting detached sync\n`);
+  fs.writeSync(fd, `[${new Date().toISOString()}] pid ${process.pid}: starting detached sync\n`);
   const child = spawn(
     process.execPath,
     [fileURLToPath(import.meta.url), ...args.filter((a) => a !== '--background'), '--detached'],
@@ -53,5 +53,6 @@ if (!(await ensureReady({ quiet }))) {
 
 // The detached child's stdout is the log file, so it runs the plain command:
 // the summary line ("Scanned N files, ...") is exactly what belongs in the log.
-// It also has no stdin to watch -- see handOff.
-handOff('dist/cli.js', args.filter((a) => a !== '--detached'), { watchStdin: !detached });
+// `--detached` goes along, since a detached sync may wait where an interactive
+// one should not (src/cli.ts). It also has no stdin to watch -- see handOff.
+handOff('dist/cli.js', args, { watchStdin: !detached });

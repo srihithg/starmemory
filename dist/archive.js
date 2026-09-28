@@ -20,10 +20,19 @@ export function archivePathFor(root, harness, project, sourcePath) {
     return path.join(root, harness, project, name.endsWith(ARCHIVE_SUFFIX) ? name : `${name}${ARCHIVE_SUFFIX}`);
 }
 /** A readable stream of the transcript's lines, whether it is a plain source
- * file or a gzipped archive copy. */
+ * file or a gzipped archive copy. A read error, a copy removed by `forget`
+ * for one, reaches the reader: pipe() does not pass it on, and an error
+ * nobody listens for would end the process. */
 export function openArchive(filePath) {
     const raw = fs.createReadStream(filePath);
-    return filePath.endsWith(ARCHIVE_SUFFIX) ? raw.pipe(zlib.createGunzip()) : raw;
+    if (!filePath.endsWith(ARCHIVE_SUFFIX))
+        return raw;
+    const gunzip = zlib.createGunzip();
+    raw.once('error', (error) => gunzip.destroy(error));
+    // And the other way: a corrupt copy, or a reader that stops early, would
+    // otherwise leave the file open.
+    gunzip.once('close', () => raw.destroy());
+    return raw.pipe(gunzip);
 }
 /** The whole transcript as text; see openArchive. */
 export function readArchive(filePath) {

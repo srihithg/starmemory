@@ -39,11 +39,14 @@ export function writeErrorSentinel(summaryPath, error) {
     fs.writeFileSync(summaryPath, `${ERROR_PREFIX} ${message.split('\n')[0]}\n`, 'utf8');
 }
 /** Quiet for long enough, not yet summarised (or the last try failed), newest
- * first, at most `limit`. */
+ * first, at most `limit`. Never a Cowork record: the model wrote it as a
+ * summary already, and there is no session to resume, so summarising it again
+ * would be a model call that says less than the record. */
 export function selectForSummary(candidates, { now = Date.now(), quietMs = QUIET_MS, limit = DEFAULT_SUMMARY_LIMIT } = {}) {
     if (limit <= 0)
         return [];
     return candidates
+        .filter((c) => c.harness !== 'cowork')
         .filter((c) => c.sourceMtimeMs <= now - quietMs)
         .filter((c) => {
         const state = readSummaryState(summaryPathFor(c.archivePath)).kind;
@@ -124,10 +127,16 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
     const picked = selectForSummary(candidates, { now: opts.now, quietMs: opts.quietMs, limit: opts.limit });
     const result = { attempted: picked.length, written: 0, failed: 0 };
     for (const c of picked) {
+        if (opts.skip?.(c)) {
+            result.attempted--;
+            continue;
+        }
         const summaryPath = summaryPathFor(c.archivePath);
         try {
             const exchanges = await parseConversation(c.archivePath, c.project, c.archivePath);
             if (exchanges.length === 0) {
+                if (opts.skip?.(c))
+                    continue;
                 writeSummary(summaryPath, '');
                 result.written++;
                 continue;
@@ -136,10 +145,18 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
             const text = c.harness === 'codex'
                 ? await summarizers.codex({ threadId: c.sessionId, transcript })
                 : await summarizers.claude({ sessionId: c.sessionId, cwd: await recordedCwd(c.archivePath), transcript });
+            // Asked again: the model call takes a while, and a session forgotten in
+            // the meantime must not get its summary written after all.
+            if (opts.skip?.(c))
+                continue;
             writeSummary(summaryPath, text);
             result.written++;
         }
         catch (error) {
+            // Forgotten while it was being read, its copy removed under it: there is
+            // nothing to retry, and a sentinel would outlive the forget.
+            if (opts.skip?.(c) || !fs.existsSync(c.archivePath))
+                continue;
             writeErrorSentinel(summaryPath, error);
             result.failed++;
             log(`starmemory: summary failed for ${c.archivePath}: ${error instanceof Error ? error.message : String(error)}`);
