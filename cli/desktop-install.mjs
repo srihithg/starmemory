@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { LAUNCH_CONFIG, MIN_NODE_MAJOR, resolvePluginRoot } from './desktop-launch.mjs';
+import { LAUNCH_CONFIG, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot } from './desktop-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -166,30 +166,26 @@ export function withServer(config, name, entry, launcher) {
   return { config: { ...config, mcpServers: servers }, replaced };
 }
 
-function isInside(child, parent) {
-  const real = (p) => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const relative = path.relative(real(parent), real(child));
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+/** What the launcher is told about the copy at `root`. When Claude Code
+ * installed it, the launcher follows that plugin's later installs, and only
+ * that plugin's: starmemory from the same marketplace. A checkout elsewhere is
+ * used as it is. */
+export function launchConfig({ root, pluginsDir }) {
+  const marketplace = marketplaceOf(root, pluginsDir);
+  if (!marketplace) return { root, pluginsDir, follow: false };
+  return { root, pluginsDir, follow: true, plugin: `starmemory@${marketplace}`, marketplace };
 }
 
-/** Copy the launcher and the node-finding shim into `dir`, and record where
- * this copy is. Rewritten on every run, so running this again brings a newer
- * launcher along. The launcher follows Claude Code's installs when this copy is
- * one of them; a checkout elsewhere is used as it is. */
-export function installLauncher(dir, { root, pluginsDir }) {
+/** Copy the launcher and the node-finding shim into `dir`, and record `launch`
+ * beside them. Rewritten on every run, so running this again brings a newer
+ * launcher along. */
+export function installLauncher(dir, launch) {
   fs.mkdirSync(dir, { recursive: true });
   const launcher = path.join(dir, 'launch.mjs');
   fs.copyFileSync(path.join(here, 'desktop-launch.mjs'), launcher);
   fs.copyFileSync(path.join(here, 'run-node.sh'), path.join(dir, 'run-node.sh'));
-  const follow = isInside(root, pluginsDir);
-  fs.writeFileSync(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify({ root, pluginsDir, follow }, null, 2)}\n`);
-  return { launcher, follow };
+  fs.writeFileSync(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`);
+  return launcher;
 }
 
 function stamp(date) {
@@ -411,9 +407,9 @@ export async function main(argv, deps = {}) {
   }
 
   const root = path.resolve(here, '..');
-  const pluginsDir = pluginsDirOf(env);
-  const { launcher, follow } = installLauncher(dir, { root, pluginsDir });
-  const serverRoot = resolvePluginRoot({ root, pluginsDir, follow });
+  const launch = launchConfig({ root, pluginsDir: pluginsDirOf(env) });
+  const launcher = installLauncher(dir, launch);
+  const serverRoot = resolvePluginRoot(launch);
   const node = nodeTheAppFinds(dir, { env, platform });
 
   if (opts.prepare && serverRoot) {
@@ -470,7 +466,7 @@ export async function main(argv, deps = {}) {
     out(`  launcher  ${launcher}`);
     out(
       `  starts    ${serverRoot ?? 'nothing yet: no runnable copy was found'}` +
-        (follow ? ', or whichever version Claude Code has installed newest at launch' : '')
+        (launch.follow ? `, or whichever version of ${launch.plugin} Claude Code has installed newest at launch` : '')
     );
     out(nodeLine(node));
     if (entry.env) out(`  settings  ${Object.keys(entry.env).join(', ')}, copied from this shell`);

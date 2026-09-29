@@ -13,7 +13,9 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 // @ts-expect-error -- plain JS module, no type declarations by design
 import { DEFAULT_SERVER_NAME, desktopConfigPath, launcherDir, main } from '../cli/desktop-install.mjs';
 // @ts-expect-error -- plain JS module, no type declarations by design
-import { resolvePluginRoot } from '../cli/desktop-launch.mjs';
+import { isPrepared, resolvePluginRoot } from '../cli/desktop-launch.mjs';
+// @ts-expect-error -- plain JS module, no type declarations by design
+import { RUNTIME_DEPENDENCIES, findMissingAddons, findMissingDeps } from '../cli/install-check.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SECRET = 'secret-token-123';
@@ -63,7 +65,16 @@ function install(args: string[] = [], entry = path.join(root, 'cli', 'starmemory
 }
 
 const readConfig = () => JSON.parse(fs.readFileSync(configFile, 'utf8'));
+const readLaunch = () => JSON.parse(fs.readFileSync(path.join(launcherDir(env), 'launch.json'), 'utf8'));
 const backups = () => fs.readdirSync(path.dirname(configFile)).filter((name) => name.includes('.starmemory-backup-'));
+
+/** A copy of this checkout's cli/ and package.json at `copy`, which is what a
+ * fresh plugin install has before npm install. */
+function freshCopy(copy: string) {
+  fs.cpSync(path.join(root, 'cli'), path.join(copy, 'cli'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'package.json'), path.join(copy, 'package.json'));
+  return copy;
+}
 
 describe('desktop-install', () => {
   it('adds the server beside the existing ones, backs the config up, and prints no other server\'s settings', () => {
@@ -95,8 +106,28 @@ describe('desktop-install', () => {
   it('records the copy it ran from for the launcher, and follows Claude Code only for a copy Claude Code installed', () => {
     install();
 
-    const launch = JSON.parse(fs.readFileSync(path.join(launcherDir(env), 'launch.json'), 'utf8'));
-    expect(launch).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false });
+    expect(readLaunch()).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false });
+  });
+
+  it('pins the launcher to the plugin it ran from, by the marketplace its copy sits under', () => {
+    const pluginsDir = path.join(home, '.claude', 'plugins');
+    for (const copy of [path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.3.0'), path.join(pluginsDir, 'marketplaces', 'acme')]) {
+      freshCopy(copy);
+
+      const { status, output } = install([], path.join(copy, 'cli', 'starmemory.mjs'));
+
+      expect(status).toBe(0);
+      expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme' });
+      expect(output).toContain('or whichever version of starmemory@acme Claude Code has installed newest at launch');
+    }
+  });
+
+  it('does not follow a copy that sits elsewhere in the plugins folder', () => {
+    const copy = freshCopy(path.join(home, '.claude', 'plugins', 'local', 'starmemory'));
+
+    expect(install([], path.join(copy, 'cli', 'starmemory.mjs')).status).toBe(0);
+
+    expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir: path.join(home, '.claude', 'plugins'), follow: false });
   });
 
   it('uses the name given with --name, and drops its own earlier entry but no one else\'s', () => {
@@ -196,15 +227,16 @@ describe('desktop-install', () => {
   });
 
   it('runs from a copy with no node_modules and no dist, as a fresh plugin install is', () => {
-    const copy = path.join(dir, 'fresh-copy');
-    fs.cpSync(path.join(root, 'cli'), path.join(copy, 'cli'), { recursive: true });
-    fs.copyFileSync(path.join(root, 'package.json'), path.join(copy, 'package.json'));
+    const copy = freshCopy(path.join(dir, 'fresh-copy'));
+    // Node runs a script from its real path, so that is the root it reports,
+    // under a temp folder that is a link, as /var is on macOS.
+    const real = fs.realpathSync.native(copy);
 
     const { status, output } = install([], path.join(copy, 'cli', 'starmemory.mjs'));
 
     expect(status).toBe(0);
-    expect(output).toContain(`starts    ${copy}`);
-    expect(JSON.parse(fs.readFileSync(path.join(launcherDir(env), 'launch.json'), 'utf8')).root).toBe(copy);
+    expect(output).toContain(`starts    ${real}`);
+    expect(readLaunch().root).toBe(real);
   });
 });
 
@@ -320,13 +352,29 @@ describe('desktop-install while the Claude app is running', () => {
 });
 
 describe('the stable launcher', () => {
+  const dependencies = { '@modelcontextprotocol/sdk': '^1.0.0', zod: '^4.6.1' };
+
   /** A fake installed copy: enough for the launcher to call it runnable. */
-  function copyAt(dirPath: string, version: string) {
+  function copyAt(dirPath: string, version: string, deps: Record<string, string> = dependencies) {
     fs.mkdirSync(path.join(dirPath, 'cli'), { recursive: true });
-    fs.writeFileSync(path.join(dirPath, 'package.json'), JSON.stringify({ name: 'starmemory', version }));
+    fs.writeFileSync(path.join(dirPath, 'package.json'), JSON.stringify({ name: 'starmemory', version, dependencies: deps }));
     fs.writeFileSync(path.join(dirPath, 'cli', 'mcp-server.mjs'), '');
     return dirPath;
   }
+
+  /** What npm install and the addon download leave in a copy. */
+  function prepare(dirPath: string) {
+    fs.mkdirSync(path.join(dirPath, 'native'), { recursive: true });
+    fs.writeFileSync(path.join(dirPath, 'native', `starmemory_native.${process.platform}-${process.arch}.node`), '');
+    const deps = JSON.parse(fs.readFileSync(path.join(dirPath, 'package.json'), 'utf8')).dependencies;
+    for (const name of Object.keys(deps)) {
+      fs.mkdirSync(path.join(dirPath, 'node_modules', name), { recursive: true });
+      fs.writeFileSync(path.join(dirPath, 'node_modules', name, 'package.json'), '{}');
+    }
+    return dirPath;
+  }
+
+  const recordInstalls = (pluginsDir: string, record: unknown) => fs.writeFileSync(path.join(pluginsDir, 'installed_plugins.json'), JSON.stringify(record));
 
   it('starts the newest copy Claude Code has recorded as installed', () => {
     const pluginsDir = path.join(dir, 'plugins');
@@ -349,11 +397,119 @@ describe('the stable launcher', () => {
     const orphaned = copyAt(path.join(pluginsDir, 'cache', 'starmemory', 'starmemory', '0.4.0'), '0.4.0');
     fs.writeFileSync(path.join(orphaned, '.orphaned_at'), '1790000000000');
     const checkout = copyAt(path.join(dir, 'checkout'), '9.9.9');
+    const marketplace = 'starmemory';
 
-    expect(resolvePluginRoot({ root: checkout, pluginsDir, follow: true })).toBe(kept);
-    expect(resolvePluginRoot({ root: checkout, pluginsDir, follow: false })).toBe(checkout);
-    expect(resolvePluginRoot({ root: checkout, pluginsDir: path.join(dir, 'empty'), follow: true })).toBe(checkout);
-    expect(resolvePluginRoot({ root: path.join(dir, 'gone'), pluginsDir: path.join(dir, 'empty'), follow: true })).toBeUndefined();
+    expect(resolvePluginRoot({ root: checkout, pluginsDir, follow: true, marketplace })).toBe(kept);
+    expect(resolvePluginRoot({ root: checkout, pluginsDir, follow: false, marketplace })).toBe(checkout);
+    expect(resolvePluginRoot({ root: checkout, pluginsDir: path.join(dir, 'empty'), follow: true, marketplace })).toBe(checkout);
+    expect(resolvePluginRoot({ root: path.join(dir, 'gone'), pluginsDir: path.join(dir, 'empty'), follow: true, marketplace })).toBeUndefined();
+  });
+
+  it('starts only its own plugin, starmemory from its own marketplace, and only from that plugin\'s cache folder', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const own = copyAt(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.3.0'), '0.3.0');
+    const otherMarketplace = copyAt(path.join(pluginsDir, 'cache', 'elsewhere', 'starmemory', '9.0.0'), '9.0.0');
+    const otherPlugin = copyAt(path.join(pluginsDir, 'cache', 'acme', 'fork', '9.1.0'), '9.1.0');
+    const outside = copyAt(path.join(dir, 'outside', 'starmemory'), '9.2.0');
+    if (process.platform !== 'win32') fs.symlinkSync(outside, path.join(pluginsDir, 'cache', 'acme', 'starmemory', '9.3.0'));
+    recordInstalls(pluginsDir, {
+      version: 2,
+      plugins: {
+        'starmemory@elsewhere': [{ scope: 'user', installPath: otherMarketplace }],
+        'fork@acme': [{ scope: 'user', installPath: otherPlugin }],
+        'starmemory@acme': [
+          { scope: 'user', installPath: own },
+          { scope: 'project', installPath: outside },
+          { scope: 'local', installPath: path.join(pluginsDir, 'cache', 'acme', 'starmemory', '9.3.0') },
+        ],
+      },
+    });
+    const launch = { root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme' };
+
+    expect(resolvePluginRoot(launch)).toBe(own);
+    // The cache, when there is no record, is read the same way.
+    fs.rmSync(path.join(pluginsDir, 'installed_plugins.json'));
+    expect(resolvePluginRoot(launch)).toBe(own);
+  });
+
+  it('finds its plugin\'s record in the file\'s other shapes', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const older = copyAt(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.3.0'), '0.3.0');
+    const newer = copyAt(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.4.0'), '0.4.0');
+    const launch = { root: older, pluginsDir, follow: true, marketplace: 'acme' };
+    // A record naming only the older copy, so the cache alone would pick the newer.
+    const shapes = [
+      { version: 1, plugins: { 'starmemory@acme': { version: '0.3.0', installPath: older } } },
+      { users: [{ plugins: { 'starmemory@acme': [{ installPath: older }] } }] },
+    ];
+
+    for (const record of shapes) {
+      recordInstalls(pluginsDir, record);
+      expect(resolvePluginRoot(launch)).toBe(older);
+    }
+    recordInstalls(pluginsDir, { version: 2, plugins: { 'starmemory@elsewhere': [{ installPath: older }] } });
+    expect(resolvePluginRoot(launch)).toBe(newer);
+  });
+
+  it('gets the marketplace from where the copy sits for a launch.json that has none, and otherwise does not follow', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const older = copyAt(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.3.0'), '0.3.0');
+    const newer = copyAt(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.4.0'), '0.4.0');
+    const clone = copyAt(path.join(pluginsDir, 'marketplaces', 'acme'), '0.2.0');
+    const elsewhere = copyAt(path.join(pluginsDir, 'local', 'starmemory'), '0.1.0');
+
+    expect(resolvePluginRoot({ root: older, pluginsDir, follow: true })).toBe(newer);
+    expect(resolvePluginRoot({ root: clone, pluginsDir, follow: true })).toBe(newer);
+    expect(resolvePluginRoot({ root: elsewhere, pluginsDir, follow: true })).toBe(elsewhere);
+    // An old version Claude Code has removed since still names its marketplace.
+    expect(resolvePluginRoot({ root: path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.1.0'), pluginsDir, follow: true })).toBe(newer);
+  });
+
+  it('prefers the newest copy that is prepared, falls back to the newest, and never starts an orphaned one', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const cache = path.join(pluginsDir, 'cache', 'acme', 'starmemory');
+    const older = prepare(copyAt(path.join(cache, '0.3.0'), '0.3.0'));
+    const orphaned = prepare(copyAt(path.join(cache, '0.3.5'), '0.3.5'));
+    fs.writeFileSync(path.join(orphaned, '.orphaned_at'), '1790000000000');
+    const newest = copyAt(path.join(cache, '0.4.0'), '0.4.0');
+    const launch = { root: older, pluginsDir, follow: true, marketplace: 'acme' };
+
+    expect(resolvePluginRoot(launch)).toBe(older);
+    fs.rmSync(path.join(older, 'node_modules', 'zod'), { recursive: true });
+    expect(resolvePluginRoot(launch)).toBe(newest);
+  });
+
+  it('calls a copy prepared only when what ensureReady checks is there', () => {
+    const own = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).dependencies;
+    expect(Object.keys(own)).toEqual(expect.arrayContaining([...RUNTIME_DEPENDENCIES]));
+    const copy = prepare(copyAt(path.join(dir, 'copy'), '0.3.0', own));
+
+    expect(isPrepared(copy)).toBe(true);
+    expect([...findMissingDeps(copy), ...findMissingAddons(copy)]).toEqual([]);
+    for (const name of RUNTIME_DEPENDENCIES) {
+      fs.renameSync(path.join(copy, 'node_modules', name), path.join(dir, 'moved'));
+      expect(isPrepared(copy)).toBe(false);
+      fs.renameSync(path.join(dir, 'moved'), path.join(copy, 'node_modules', name));
+    }
+    fs.rmSync(path.join(copy, 'native'), { recursive: true });
+    expect(isPrepared(copy)).toBe(false);
+  });
+
+  it('ranks a prerelease below its release and above the version before', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const cache = path.join(pluginsDir, 'cache', 'acme', 'starmemory');
+    const before = copyAt(path.join(cache, '0.3.9'), '0.3.9');
+    const release = copyAt(path.join(cache, '0.4.0'), '0.4.0');
+    const beta = copyAt(path.join(cache, '0.4.0-beta.1'), '0.4.0-beta.1');
+    // Installed last, which would decide a tie.
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(release, 'package.json'), past, past);
+    fs.utimesSync(path.join(before, 'package.json'), past, past);
+    const launch = { root: before, pluginsDir, follow: true, marketplace: 'acme' };
+
+    expect(resolvePluginRoot(launch)).toBe(release);
+    fs.rmSync(release, { recursive: true });
+    expect(resolvePluginRoot(launch)).toBe(beta);
   });
 
   it('serves the four tools through exactly the command written into the config', async () => {

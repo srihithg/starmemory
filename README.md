@@ -116,8 +116,10 @@ About `desktop-install`:
 - Each run leaves a backup of the config beside it, which holds the same
   credentials as the config. Delete the backups once the app works.
 - The entry runs a small launcher in `~/.config/starmemory/desktop/` that starts
-  the newest copy Claude Code has installed, so plugin updates reach Cowork
-  without running `desktop-install` again.
+  the newest copy of starmemory Claude Code has installed from the same
+  marketplace, so plugin updates reach Cowork without running `desktop-install`
+  again. It prefers a copy whose dependencies are already installed, even an
+  older one, so the app does not wait on npm install.
 - `STARMEMORY_*` settings, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` set in the
   shell that runs it are copied into the app's entry, so the app's server and
   Claude Code's share one store. Run it again after changing them.
