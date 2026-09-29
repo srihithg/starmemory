@@ -29,9 +29,9 @@ export declare function detectHarness(filePath: string): Promise<Harness>;
  * (sessionIdsInLines). `text`, when the caller has the file's text already. */
 export declare function sessionIdsOf(filePath: string, text?: string): Promise<Set<string>>;
 export declare function parseConversation(filePath: string, project: string, archivePath: string): Promise<ParsedExchange[]>;
-/** Every .jsonl file under `dir`, at any depth. A missing folder yields
- * nothing. */
-export declare function walkJsonlFiles(dir: string): Generator<string>;
+/** Every .jsonl file under `dir`, at any depth, leaving out the folder `skip`
+ * and everything in it. A missing folder yields nothing. */
+export declare function walkJsonlFiles(dir: string, skip?: string): Generator<string>;
 /** Derives a project name the same way episodic-memory does: the JSONL file's
  * parent directory name (Claude Code's sanitized-cwd slug). */
 export declare function projectFromPath(filePath: string): string;

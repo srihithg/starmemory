@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, type Quarantine } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations, type SummaryCandidate, type SummaryOptions } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -149,6 +149,12 @@ export interface SyncOptions {
    * starmemory's own file and is deleted with its rows. Defaults to
    * defaultCoworkRoot(). */
   coworkRoot?: string;
+  /** Where forget sets Cowork records aside, and for how many days
+   * (src/cowork.ts). The sync deletes the ones set aside longer ago than that.
+   * It deletes, so it runs only when the caller names the quarantine, as the
+   * CLI does with the defaults. The folder is never walked either way; its
+   * default is defaultQuarantineRoot(). */
+  quarantine?: Quarantine;
   /** How long this sync may wait for the text-index writer when another
    * process holds it and this one has deletions or new rows the index needs.
    * Tantivy keeps the writer until the process exits, so without waiting a
@@ -209,8 +215,8 @@ export interface SyncResult {
   textSkipped: boolean;
 }
 
-function* walkAll(dirs: string[]): Generator<string> {
-  for (const dir of dirs) yield* walkJsonlFiles(dir);
+function* walkAll(dirs: string[], skip: string): Generator<string> {
+  for (const dir of dirs) yield* walkJsonlFiles(dir, skip);
 }
 
 /** Remove a Cowork record and its cursor. A record started later under the same
@@ -284,7 +290,9 @@ async function syncTranscript(
   // and written a new record.
   const sessions = [...new Set([path.basename(filePath, '.jsonl'), ...(parsed[0]?.sessionId ? [parsed[0].sessionId] : await sessionIdsOf(filePath))])];
   const leaveOut = (): TranscriptOutcome => {
-    if (harness === 'cowork') dropRecord(store, filePath);
+    // Only a file in the records folder is ours, as with the TTL above: one
+    // elsewhere that reads as a record is still a file some harness wrote.
+    if (harness === 'cowork' && isInside(filePath, coworkRoot)) dropRecord(store, filePath);
     for (const file of [copy, summaryPathFor(copy)]) fs.rmSync(file, { force: true });
     return { indexed: 0, archived: false };
   };
@@ -352,6 +360,12 @@ export async function syncAll(
   const forgottenPath = options.forgottenPath ?? defaultForgottenPath();
   const forgotten = readForgotten(forgottenPath);
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const quarantine = options.quarantine;
+  if (quarantine) {
+    for (const file of purgeQuarantine(quarantine, now)) {
+      log(`starmemory: deleted ${file}, a Cowork record set aside by a forget more than ${quarantine.days} days ago`);
+    }
+  }
 
   // Before touching anything else: if the model changed, every existing vector
   // is stale and the graph built from them would be meaningless.
@@ -365,7 +379,7 @@ export async function syncAll(
   }
 
   const dirs = Array.isArray(transcriptsDirs) ? transcriptsDirs : [transcriptsDirs];
-  for (const filePath of walkAll(dirs)) {
+  for (const filePath of walkAll(dirs, quarantine?.root ?? defaultQuarantineRoot())) {
     filesScanned++;
     let outcome: TranscriptOutcome;
     try {

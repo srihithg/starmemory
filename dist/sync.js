@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -113,9 +113,9 @@ async function waitForWriter(textIndex, waitMs) {
         await new Promise((resolve) => setTimeout(resolve, Math.min(WRITER_POLL_MS, left)));
     }
 }
-function* walkAll(dirs) {
+function* walkAll(dirs, skip) {
     for (const dir of dirs)
-        yield* walkJsonlFiles(dir);
+        yield* walkJsonlFiles(dir, skip);
 }
 /** Remove a Cowork record and its cursor. A record started later under the same
  * key is a new file whose lines count from 1 again; the old cursor would skip
@@ -169,7 +169,9 @@ async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff
     // and written a new record.
     const sessions = [...new Set([path.basename(filePath, '.jsonl'), ...(parsed[0]?.sessionId ? [parsed[0].sessionId] : await sessionIdsOf(filePath))])];
     const leaveOut = () => {
-        if (harness === 'cowork')
+        // Only a file in the records folder is ours, as with the TTL above: one
+        // elsewhere that reads as a record is still a file some harness wrote.
+        if (harness === 'cowork' && isInside(filePath, coworkRoot))
             dropRecord(store, filePath);
         for (const file of [copy, summaryPathFor(copy)])
             fs.rmSync(file, { force: true });
@@ -233,6 +235,12 @@ export async function syncAll(store, index, transcriptsDirs = defaultTranscriptD
     const forgottenPath = options.forgottenPath ?? defaultForgottenPath();
     const forgotten = readForgotten(forgottenPath);
     const log = options.log ?? ((line) => process.stderr.write(`${line}\n`));
+    const quarantine = options.quarantine;
+    if (quarantine) {
+        for (const file of purgeQuarantine(quarantine, now)) {
+            log(`starmemory: deleted ${file}, a Cowork record set aside by a forget more than ${quarantine.days} days ago`);
+        }
+    }
     // Before touching anything else: if the model changed, every existing vector
     // is stale and the graph built from them would be meaningless.
     const migration = await ensureEmbeddingModel(store);
@@ -243,7 +251,7 @@ export async function syncAll(store, index, transcriptsDirs = defaultTranscriptD
         store.meta.putSync(HARNESS_INDEX_KEY, 1);
     }
     const dirs = Array.isArray(transcriptsDirs) ? transcriptsDirs : [transcriptsDirs];
-    for (const filePath of walkAll(dirs)) {
+    for (const filePath of walkAll(dirs, quarantine?.root ?? defaultQuarantineRoot())) {
         filesScanned++;
         let outcome;
         try {

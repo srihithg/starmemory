@@ -12,8 +12,9 @@ import { VectorIndex } from '../src/vector-index.js';
 import { EMBEDDING_DIM, initEmbeddings } from '../src/embeddings.js';
 import { syncAll } from '../src/sync.js';
 import { readArchive, summaryPathFor } from '../src/archive.js';
-import { remember } from '../src/cowork.js';
+import { quarantineRecords, remember } from '../src/cowork.js';
 import { forget } from '../src/forget.js';
+import { search } from '../src/search.js';
 import { TextIndex } from '../src/text-index.js';
 import type { ConversationExchange } from '../src/types.js';
 import { writeSummary } from '../src/summaries.js';
@@ -34,6 +35,7 @@ let store: StoreHandle;
 let coworkRoot: string;
 let archiveRoot: string;
 let forgottenPath: string;
+let quarantineRoot: string;
 
 const noSummaries = { claude: async () => 'never', codex: async () => 'never' };
 const sync = (opts: Parameters<typeof syncAll>[4] = {}, { dirs, text }: { dirs?: string[]; text?: TextIndex } = {}) =>
@@ -41,6 +43,7 @@ const sync = (opts: Parameters<typeof syncAll>[4] = {}, { dirs, text }: { dirs?:
     archiveRoot,
     coworkRoot,
     forgottenPath,
+    quarantine: { root: quarantineRoot, days: 7 },
     log: () => {},
     summaries: { summarizers: noSummaries },
     ...opts,
@@ -64,6 +67,7 @@ beforeEach(() => {
   coworkRoot = path.join(dir, 'cowork');
   archiveRoot = path.join(dir, 'archive');
   forgottenPath = path.join(dir, 'forgotten.txt');
+  quarantineRoot = path.join(dir, 'quarantine');
 });
 
 afterEach(async () => {
@@ -191,6 +195,29 @@ describe('syncAll after forget', () => {
     expect(result).toMatchObject({ exchangesIndexed: 0, archived: 0 });
     expect(fs.existsSync(file)).toBe(false);
     expect(fs.existsSync(path.join(archiveRoot, 'cowork', 'lanterns', 'raced.jsonl.gz'))).toBe(false);
+  }, 120_000);
+
+  it('leaves a forgotten file that reads as a record in place when it is not in the records folder', async () => {
+    // A transcript under Claude Code's folder whose first line is a record's header.
+    const projectDir = path.join(dir, 'claude', '-Users-me-lanterns');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const lookalike = path.join(projectDir, 'looks-like-a-record.jsonl');
+    fs.writeFileSync(lookalike, [
+      { type: 'cowork_session', version: 1, session: 'looks-like-a-record', project: 'lanterns', createdAt: '2026-09-28T10:00:00.000Z' },
+      { type: 'user', promptSource: 'cowork_record', sessionId: 'looks-like-a-record', timestamp: '2026-09-28T10:00:00.000Z', message: { role: 'user', content: 'q' } },
+      { type: 'assistant', sessionId: 'looks-like-a-record', timestamp: '2026-09-28T10:00:00.000Z', message: { role: 'assistant', content: 'a' } },
+    ].map((l) => `${JSON.stringify(l)}\n`).join(''));
+    const record = remember(coworkRoot, entry('looks-like-a-record', 'Every forty hours of burning.')).file;
+    forget('looks-like-a-record', { coworkRoot, forgottenPath, archiveRoot });
+    // What a remember in another process leaves when it lost the race.
+    remember(coworkRoot, entry('looks-like-a-record', 'Raced in.'));
+
+    const result = await sync({}, { dirs: [path.join(dir, 'claude'), coworkRoot] });
+
+    expect(result).toMatchObject({ exchangesIndexed: 0, archived: 0 });
+    expect(fs.existsSync(lookalike)).toBe(true);
+    expect(fs.existsSync(record)).toBe(false);
+    expect(fs.existsSync(path.join(archiveRoot, 'cowork', '-Users-me-lanterns', 'looks-like-a-record.jsonl.gz'))).toBe(false);
   }, 120_000);
 
   it('forgets a Claude Code session without touching its transcript, and does not index it again as it grows', async () => {
@@ -683,5 +710,88 @@ describe('taking a forget back, and what goes by the file name', () => {
     });
 
     expect(index.size()).toBe(2);
+  }, 120_000);
+});
+
+describe('the quarantine, as sync sees it', () => {
+  const quarantine = (days = 7) => ({ root: quarantineRoot, days });
+  /** Everything the store has, as the session and the entry's found text. */
+  const stored = () => exchangesFrom(store, 0).map((r) => [r.sessionId, r.assistantMessage.split('\n\n')[1]]);
+
+  it('deletes what was set aside longer ago than the quarantine keeps it, and keeps the rest', async () => {
+    remember(coworkRoot, entry('old', 'Every forty hours of burning.'));
+    remember(coworkRoot, entry('new', 'Trim it flat.'));
+    const day = 24 * 60 * 60 * 1000;
+    const [old] = quarantineRecords(coworkRoot, 'old', quarantine(), new Date(Date.now() - 8 * day)).moved;
+    const [recent] = quarantineRecords(coworkRoot, 'new', quarantine(), new Date(Date.now() - 2 * day)).moved;
+
+    await sync({ quarantine: quarantine() });
+    expect(fs.existsSync(old.to)).toBe(false);
+    expect(fs.existsSync(recent.to)).toBe(true);
+
+    await sync({ quarantine: quarantine(0) });
+    expect(fs.existsSync(recent.to)).toBe(false);
+  }, 120_000);
+
+  it('never walks the quarantine, even when it was pointed inside a folder sync indexes', async () => {
+    const inside = path.join(coworkRoot, 'set-aside');
+    remember(coworkRoot, entry('hidden', 'Every forty hours of burning.'));
+    const [{ to }] = quarantineRecords(coworkRoot, 'hidden', { root: inside, days: 7 }).moved;
+    // Named as a record, too: the folder is left out, not only the suffix.
+    fs.copyFileSync(to, path.join(inside, 'lanterns', 'hidden.jsonl'));
+
+    const result = await sync({ quarantine: { root: inside, days: 7 } });
+
+    expect(result).toMatchObject({ filesScanned: 0, exchangesIndexed: 0, archived: 0 });
+    expect(exchangesFrom(store, 0)).toEqual([]);
+  }, 120_000);
+
+  it('a record moved back once its forget is taken back is indexed again, and search finds it, with no row stored twice', async () => {
+    remember(coworkRoot, entry('undo', 'Every forty hours of burning.'));
+    const { file } = remember(coworkRoot, entry('undo', 'Decided: the zeppelin gauge reads it.'));
+    remember(coworkRoot, entry('kept', 'Trim it flat.'));
+    const text = TextIndex.open(path.join(dir, 'text'));
+    await sync({}, { text });
+    expect(stored()).toHaveLength(3);
+
+    const { setAside } = forget('undo', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+    expect(await sync({}, { text })).toMatchObject({ forgotten: 2 });
+    expect(stored()).toEqual([['kept', 'Trim it flat.']]);
+    const index = openIndex(store, path.join(dir, 'index.hnsw'));
+    expect(await search(store, index, 'zeppelin', { mode: 'text' }, text)).toEqual([]);
+
+    // The undo: the line off the list first, then the file back where it was.
+    fs.writeFileSync(forgottenPath, '');
+    fs.renameSync(setAside[0].to, file);
+    const back = await sync({}, { text });
+
+    expect(back).toMatchObject({ exchangesIndexed: 2, archived: 1 });
+    expect(stored().sort()).toEqual([
+      ['kept', 'Trim it flat.'],
+      ['undo', 'Decided: the zeppelin gauge reads it.'],
+      ['undo', 'Every forty hours of burning.'],
+    ]);
+    const found = await search(store, openIndex(store, path.join(dir, 'index.hnsw')), 'zeppelin', { mode: 'text' }, text);
+    expect(found.map((r) => r.exchange.sessionId)).toEqual(['undo']);
+    expect(fs.existsSync(path.join(archiveRoot, 'cowork', 'lanterns', 'undo.jsonl.gz'))).toBe(true);
+    expect((await sync({}, { text })).exchangesIndexed).toBe(0);
+    expect(stored()).toHaveLength(3);
+  }, 120_000);
+
+  it('a record moved back before any sync deleted its rows stores nothing twice', async () => {
+    remember(coworkRoot, entry('quick', 'Every forty hours of burning.'));
+    const { file } = remember(coworkRoot, entry('quick', 'Trim it flat.'));
+    await sync();
+    const { setAside } = forget('quick', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+
+    fs.writeFileSync(forgottenPath, '');
+    fs.renameSync(setAside[0].to, file);
+    const back = await sync();
+
+    expect(back).toMatchObject({ exchangesIndexed: 0, forgotten: 0 });
+    expect(stored()).toEqual([
+      ['quick', 'Every forty hours of burning.'],
+      ['quick', 'Trim it flat.'],
+    ]);
   }, 120_000);
 });

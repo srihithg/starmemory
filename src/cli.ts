@@ -13,7 +13,7 @@ import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { WRITER_WAIT_MS, syncAll } from './sync.js';
 import { search } from './search.js';
 import { defaultForgottenPath, readForgotten } from './forget.js';
-import { defaultCoworkRoot } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineDays, defaultQuarantineRoot } from './cowork.js';
 
 const DB_PATH =
   process.env.STARMEMORY_DB_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'store.mdb');
@@ -47,6 +47,7 @@ async function main() {
     try {
       const result = await syncAll(store, index, coworkOnly ? [defaultCoworkRoot()] : undefined, textIndex, {
         writerWaitMs: detached ? WRITER_WAIT_MS : 0,
+        quarantine: { root: defaultQuarantineRoot(), days: defaultQuarantineDays() },
       });
       if (!background) {
         const bm25 = result.textSkipped

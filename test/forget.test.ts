@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openStore, insertExchange, exchangesFrom, getVector, type StoreHandle } from '../src/store.js';
+import { openStore, insertExchange, exchangesFrom, getVector, syncCursorKey, type StoreHandle } from '../src/store.js';
 import { TextIndex } from '../src/text-index.js';
 import { VectorIndex } from '../src/vector-index.js';
 import { EMBEDDING_DIM } from '../src/embeddings.js';
@@ -256,7 +256,7 @@ describe('forget on a server that serves Cowork records only', () => {
     const session = 'cowork-2026-09-29-abcd1234';
     const result = forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() });
 
-    expect(result).toMatchObject({ records: [], copies: [], pendingRows: 0 });
+    expect(result).toMatchObject({ records: [], setAside: [], copies: [], pendingRows: 0 });
     expect(describeForget(result)).toContain('Nothing was stored under this key');
     expect(() => remember(coworkRoot, entry(session), { isForgotten: (s) => readForgotten(forgottenPath).has(s) })).toThrow(/asked to forget/);
     expect(findRecords(coworkRoot, session)).toEqual([]);
@@ -270,6 +270,58 @@ describe('forget on a server that serves Cowork records only', () => {
 
     expect(result).toMatchObject({ pendingRows: 2, pendingHarnesses: ['cowork'], entries: 1 });
     expect(fs.existsSync(copy)).toBe(false);
+  });
+});
+
+describe('forget with a quarantine', () => {
+  const quarantine = () => ({ root: path.join(dir, 'quarantine'), days: 7 });
+
+  it('sets the record aside instead of deleting it, removes the archive copy at once, and says so', () => {
+    remember(coworkRoot, entry('s-1'));
+    const { file } = remember(coworkRoot, entry('s-1'));
+    const copy = archivePathFor(archiveRoot, 'cowork', 'lanterns', file);
+    fs.mkdirSync(path.dirname(copy), { recursive: true });
+    fs.writeFileSync(copy, 'gz bytes');
+
+    const result = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+
+    expect(result).toMatchObject({ records: [file], entries: 2, copies: [copy], setAsideDays: 7 });
+    expect(result.setAside).toHaveLength(1);
+    const [{ from, to }] = result.setAside;
+    expect(from).toBe(file);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readFileSync(to, 'utf8')).toContain('How to trim a wick?');
+    expect(fs.existsSync(copy)).toBe(false);
+    expect(readForgotten(forgottenPath).has('s-1')).toBe(true);
+    const said = describeForget(result);
+    expect(said).toContain('Set aside now: its Cowork record, 2 entries. It is hidden from search and read from this moment, and kept for 7 days');
+    expect(said).toContain('so that a forget the user did not mean can be undone. After 7 days a sync deletes it for good.');
+    expect(said).toContain(`To undo it within 7 days: delete the line s-1 from ${forgottenPath}, then move the file back to ${file}.`);
+    expect(said).toContain('Removed now: the archive copy starmemory kept of it, with any summary.');
+    expect(said).not.toContain('Removed now: its Cowork record');
+    expect(said).not.toContain('Nothing was stored');
+  });
+
+  it('keeps the record\'s cursor, which the sync that deletes the rows removes with them', () => {
+    const { file } = remember(coworkRoot, entry('s-1'));
+    store.meta.putSync(syncCursorKey(file), 3);
+
+    forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+
+    expect(store.meta.get(syncCursorKey(file))).toBe(3);
+  });
+
+  it('deletes at once, as without one, when its days are 0', () => {
+    const { file } = remember(coworkRoot, entry('s-1'));
+    store.meta.putSync(syncCursorKey(file), 3);
+
+    const result = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: { ...quarantine(), days: 0 } });
+
+    expect(result).toMatchObject({ records: [file], setAside: [] });
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(quarantine().root)).toBe(false);
+    expect(store.meta.get(syncCursorKey(file))).toBeUndefined();
+    expect(describeForget(result)).toContain('Removed now: its Cowork record, 1 entry');
   });
 });
 

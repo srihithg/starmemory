@@ -16,12 +16,13 @@
 //
 // A server that serves Cowork records only (cowork.ts, Scope) takes a forget
 // from a caller that may have been steered, so it refuses a Claude Code or
-// Codex session.
+// Codex session, and sets a Cowork record aside for a few days rather than
+// deleting it, so that a forget the user never asked for can be undone.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archivePathFor, summaryPathFor } from './archive.js';
-import { RefusedError, deleteRecords, sessionKeyProblem } from './cowork.js';
+import { RefusedError, deleteRecords, quarantineRecords, sessionKeyProblem } from './cowork.js';
 import { projectFromPath, walkJsonlFiles } from './parser.js';
 import { filterIds, getExchange, syncCursorKey } from './store.js';
 import { groupByFile, removeConversations } from './ttl.js';
@@ -144,13 +145,13 @@ function heldByAnotherHarness(session, { store, archiveRoot, dirs }) {
             return true;
     return false;
 }
-/** Forget `session`: put it on the list, then remove its Cowork record and the
- * archive copies and summaries kept of it. The caller starts a sync, which
- * deletes the rest. Throws RefusedError, changing nothing, for a key that
- * could not name a session, or on a Cowork-only server for a Claude Code or
- * Codex session. A key with nothing stored under it yet is listed all the
- * same, so remember refuses it from the first entry. */
-export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly }) {
+/** Forget `session`: put it on the list, then remove its Cowork record, or set
+ * it aside, and remove the archive copies and summaries kept of it. The caller
+ * starts a sync, which deletes the rest. Throws RefusedError, changing nothing,
+ * for a key that could not name a session, or on a Cowork-only server for a
+ * Claude Code or Codex session. A key with nothing stored under it yet is
+ * listed all the same, so remember refuses it from the first entry. */
+export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, now = new Date() }) {
     const problem = sessionKeyProblem(session);
     if (problem)
         throw new RefusedError(problem);
@@ -164,11 +165,25 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
     const alreadyForgotten = readForgotten(forgottenPath).has(session);
     if (!alreadyForgotten)
         addForgotten(forgottenPath, session);
-    const { files, entries } = deleteRecords(coworkRoot, session);
-    // A record started later under this key counts its lines from 1 again, and
-    // the old cursor would skip them.
-    for (const file of files)
-        store?.meta.remove(syncCursorKey(file));
+    const setAsideDays = quarantine?.days ?? 0;
+    let files;
+    let entries;
+    let setAside = [];
+    if (quarantine && setAsideDays > 0) {
+        // The cursor stays. Brought back before the sync has deleted its rows, the
+        // record is the same file, and the cursor is what keeps its entries from
+        // being stored twice; the sync that deletes the rows removes it with them
+        // (forgetSessions).
+        ({ moved: setAside, entries } = quarantineRecords(coworkRoot, session, quarantine, now));
+        files = setAside.map((m) => m.from);
+    }
+    else {
+        ({ files, entries } = deleteRecords(coworkRoot, session));
+        // A record started later under this key counts its lines from 1 again, and
+        // the old cursor would skip them.
+        for (const file of files)
+            store?.meta.remove(syncCursorKey(file));
+    }
     const rows = store ? storedRows(store, session) : [];
     // Plain files need no index writer, and a copy holds the whole conversation,
     // so they go now rather than with the rows. Found through the rows, the
@@ -183,6 +198,9 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
         session,
         records: files,
         entries,
+        setAside,
+        setAsideDays,
+        forgottenPath,
         copies: [...copies].filter(removeCopy),
         pendingRows: rows.length,
         pendingHarnesses: [...new Set(rows.map((r) => r.harness ?? 'claude'))],
@@ -193,8 +211,16 @@ const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 /** What the model is told, to pass on to the user in a sentence. */
 export function describeForget(result) {
     const lines = [`Forgot session ${result.session}.`];
+    const setAside = result.setAside.length > 0;
+    if (setAside) {
+        const days = plural(result.setAsideDays, 'day', 'days');
+        lines.push(`Set aside now: its Cowork record, ${plural(result.entries, 'entry', 'entries')}. It is hidden from search and read from this moment, ` +
+            `and kept for ${days} (${result.setAside.map((m) => m.to).join(', ')}) so that a forget the user did not mean can be undone. After ${days} a sync deletes it for good.`);
+        lines.push(`To undo it within ${days}: delete the line ${result.session} from ${result.forgottenPath}, then move the file back to ` +
+            `${result.setAside.map((m) => m.from).join(', ')}.`);
+    }
     const removed = [
-        ...(result.records.length > 0 ? [`its Cowork record, ${plural(result.entries, 'entry', 'entries')} (${result.records.join(', ')})`] : []),
+        ...(result.records.length > 0 && !setAside ? [`its Cowork record, ${plural(result.entries, 'entry', 'entries')} (${result.records.join(', ')})`] : []),
         ...(result.copies.length > 0 ? [`the archive ${result.copies.length === 1 ? 'copy' : 'copies'} starmemory kept of it, with any summary`] : []),
     ];
     if (removed.length > 0)
@@ -203,7 +229,7 @@ export function describeForget(result) {
         lines.push(`Hidden from search from now on: ${plural(result.pendingRows, 'indexed exchange', 'indexed exchanges')}. ` +
             'A background sync deletes them and their text-index entries, usually within a minute, or when a sync that is already running finishes.');
     }
-    if (removed.length === 0 && result.pendingRows === 0) {
+    if (removed.length === 0 && result.pendingRows === 0 && !setAside) {
         lines.push(result.alreadyForgotten
             ? 'It had been forgotten already; nothing of it is stored.'
             : 'Nothing was stored under this key. If you meant this session, check that the key is the one from the starmemory start-up line.');

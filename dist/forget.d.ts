@@ -1,3 +1,4 @@
+import { type Quarantine } from './cowork.js';
 import { type StoreHandle } from './store.js';
 import type { TextIndex } from './text-index.js';
 import { type RemoveResult } from './ttl.js';
@@ -14,10 +15,19 @@ export declare function readForgotten(file: string): Set<string>;
 export declare function addForgotten(file: string, session: string): void;
 export interface ForgetResult {
     session: string;
-    /** Cowork record files removed at once. */
+    /** Cowork record files removed at once, or set aside. */
     records: string[];
     /** Entries those records held. */
     entries: number;
+    /** Where each record was set aside, when it was (see ForgetOptions.quarantine). */
+    setAside: {
+        from: string;
+        to: string;
+    }[];
+    /** How long a set-aside record is kept before a sync deletes it. */
+    setAsideDays: number;
+    /** The list the session was put on. */
+    forgottenPath: string;
     /** Archive copies removed at once, with their summaries. */
     copies: string[];
     /** Exchanges still in the store: hidden from search from now on, deleted by
@@ -44,14 +54,18 @@ export interface ForgetOptions {
     coworkOnly?: {
         dirs: HarnessDirs;
     };
+    /** Where a Cowork record is set aside instead of deleted, and for how many
+     * days. Without it, or at 0 days, the record is deleted at once. */
+    quarantine?: Quarantine;
+    now?: Date;
 }
-/** Forget `session`: put it on the list, then remove its Cowork record and the
- * archive copies and summaries kept of it. The caller starts a sync, which
- * deletes the rest. Throws RefusedError, changing nothing, for a key that
- * could not name a session, or on a Cowork-only server for a Claude Code or
- * Codex session. A key with nothing stored under it yet is listed all the
- * same, so remember refuses it from the first entry. */
-export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly }: ForgetOptions): ForgetResult;
+/** Forget `session`: put it on the list, then remove its Cowork record, or set
+ * it aside, and remove the archive copies and summaries kept of it. The caller
+ * starts a sync, which deletes the rest. Throws RefusedError, changing nothing,
+ * for a key that could not name a session, or on a Cowork-only server for a
+ * Claude Code or Codex session. A key with nothing stored under it yet is
+ * listed all the same, so remember refuses it from the first entry. */
+export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, now }: ForgetOptions): ForgetResult;
 /** What the model is told, to pass on to the user in a sentence. */
 export declare function describeForget(result: ForgetResult): string;
 /** The sync step: delete every stored conversation of a forgotten session, the

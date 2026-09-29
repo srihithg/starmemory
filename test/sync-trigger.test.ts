@@ -156,6 +156,7 @@ describe('the sync it starts', () => {
         STARMEMORY_ARCHIVE_PATH: path.join(dir, 'archive'),
         STARMEMORY_COWORK_PATH: path.join(dir, 'cowork'),
         STARMEMORY_FORGOTTEN_PATH: path.join(dir, 'forgotten.txt'),
+        STARMEMORY_QUARANTINE_PATH: path.join(dir, 'quarantine'),
         STARMEMORY_SUMMARY_LIMIT: '0',
         CLAUDE_CONFIG_DIR: path.join(dir, 'claude'),
         CODEX_HOME: path.join(dir, 'codex'),

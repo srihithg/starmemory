@@ -9,17 +9,23 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import {
   DEFAULT_PROJECT,
+  DEFAULT_QUARANTINE_DAYS,
   DEFAULT_REMEMBER_DAILY_LIMIT,
   DailyCap,
   LIMITS,
+  QUARANTINE_SUFFIX,
   RefusedError,
   countEntries,
   defaultCoworkRoot,
+  defaultQuarantineDays,
+  defaultQuarantineRoot,
   defaultRememberDailyLimit,
   describeRemember,
   escapeControlTags,
   findRecords,
   projectSlug,
+  purgeQuarantine,
+  quarantineRecords,
   remember,
   serverScope,
   sessionKeyProblem,
@@ -250,5 +256,83 @@ describe('remember', () => {
 
     expect(result).toMatchObject({ file, created: true, entries: 1 });
     expect(lines(file).map((l) => l.type)).toEqual(['cowork_session', 'user', 'assistant']);
+  });
+});
+
+describe('the quarantine', () => {
+  const quarantine = () => ({ root: path.join(dir, 'quarantine'), days: 7 });
+
+  it('lives under ~/.config/starmemory for 7 days unless STARMEMORY_QUARANTINE_PATH and _DAYS say otherwise', () => {
+    expect(defaultQuarantineRoot({})).toBe(path.join(os.homedir(), '.config', 'starmemory', 'quarantine'));
+    expect(defaultQuarantineRoot({ STARMEMORY_QUARANTINE_PATH: '/q' })).toBe('/q');
+    expect(defaultQuarantineDays({})).toBe(DEFAULT_QUARANTINE_DAYS);
+    expect(DEFAULT_QUARANTINE_DAYS).toBe(7);
+    expect(defaultQuarantineDays({ STARMEMORY_QUARANTINE_DAYS: '0' })).toBe(0);
+    expect(defaultQuarantineDays({ STARMEMORY_QUARANTINE_DAYS: '30' })).toBe(30);
+    for (const value of ['', 'soon', '-3']) expect(defaultQuarantineDays({ STARMEMORY_QUARANTINE_DAYS: value })).toBe(DEFAULT_QUARANTINE_DAYS);
+  });
+
+  it('takes a record out of the records folder into its project\'s folder, under a name no transcript search matches', () => {
+    const { file } = remember(root, entry());
+    const now = new Date('2026-09-28T10:00:00.123Z');
+
+    const { moved, entries } = quarantineRecords(root, entry().session, quarantine(), now);
+
+    expect(entries).toBe(1);
+    expect(moved).toHaveLength(1);
+    expect(moved[0].from).toBe(file);
+    expect(path.dirname(moved[0].to)).toBe(path.join(quarantine().root, 'starmemory'));
+    expect(path.basename(moved[0].to)).toMatch(/^cowork-2026-09-28-76aa87a1\.20260928T100000Z-[0-9a-f]{8}\.jsonl\.forgotten$/);
+    expect(moved[0].to.endsWith('.jsonl')).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(findRecords(root, entry().session)).toEqual([]);
+    expect(fs.statSync(moved[0].to).mtimeMs).toBe(now.getTime());
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(quarantine().root).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.dirname(moved[0].to)).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(moved[0].to).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it('never overwrites a record set aside earlier under the same key', () => {
+    const now = new Date('2026-09-28T10:00:00Z');
+    const names = new Set<string>();
+    for (let i = 0; i < 3; i++) {
+      remember(root, entry({ found: `life ${i}` }));
+      for (const { to } of quarantineRecords(root, entry().session, quarantine(), now).moved) names.add(to);
+    }
+
+    expect(names.size).toBe(3);
+    const kept = fs.readdirSync(path.join(quarantine().root, 'starmemory')).map((name) => fs.readFileSync(path.join(quarantine().root, 'starmemory', name), 'utf8'));
+    expect(kept.map((text) => text.match(/life \d/)?.[0]).sort()).toEqual(['life 0', 'life 1', 'life 2']);
+  });
+
+  it('purges what was set aside longer ago than its days, and nothing else', () => {
+    const now = Date.now();
+    remember(root, entry({ session: 'old' }));
+    remember(root, entry({ session: 'new' }));
+    const [old] = quarantineRecords(root, 'old', quarantine(), new Date(now - 8 * 24 * 60 * 60 * 1000)).moved;
+    const [recent] = quarantineRecords(root, 'new', quarantine(), new Date(now - 6 * 24 * 60 * 60 * 1000)).moved;
+    // Files that are not a set-aside record, in a folder the path was pointed at.
+    const foreign = path.join(quarantine().root, 'starmemory', 'notes.txt');
+    fs.writeFileSync(foreign, 'mine');
+    const then = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(foreign, then, then);
+
+    expect(purgeQuarantine(quarantine(), now)).toEqual([old.to]);
+    expect(fs.existsSync(recent.to)).toBe(true);
+    expect(fs.existsSync(foreign)).toBe(true);
+    expect(purgeQuarantine({ ...quarantine(), days: 0 }, now)).toEqual([recent.to]);
+    expect(fs.existsSync(foreign)).toBe(true);
+  });
+
+  it('removes a project folder it empties, and purges nothing where there is no quarantine', () => {
+    remember(root, entry());
+    const [{ to }] = quarantineRecords(root, entry().session, quarantine(), new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)).moved;
+
+    expect(purgeQuarantine(quarantine())).toEqual([to]);
+    expect(fs.readdirSync(quarantine().root)).toEqual([]);
+    expect(purgeQuarantine({ root: path.join(dir, 'none'), days: 7 })).toEqual([]);
+    expect(QUARANTINE_SUFFIX).toBe('.jsonl.forgotten');
   });
 });

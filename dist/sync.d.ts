@@ -1,3 +1,4 @@
+import { type Quarantine } from './cowork.js';
 import { type SummaryOptions } from './summaries.js';
 import { type StoreHandle } from './store.js';
 import { VectorIndex } from './vector-index.js';
@@ -69,6 +70,12 @@ export interface SyncOptions {
      * starmemory's own file and is deleted with its rows. Defaults to
      * defaultCoworkRoot(). */
     coworkRoot?: string;
+    /** Where forget sets Cowork records aside, and for how many days
+     * (src/cowork.ts). The sync deletes the ones set aside longer ago than that.
+     * It deletes, so it runs only when the caller names the quarantine, as the
+     * CLI does with the defaults. The folder is never walked either way; its
+     * default is defaultQuarantineRoot(). */
+    quarantine?: Quarantine;
     /** How long this sync may wait for the text-index writer when another
      * process holds it and this one has deletions or new rows the index needs.
      * Tantivy keeps the writer until the process exits, so without waiting a

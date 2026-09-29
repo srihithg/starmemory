@@ -426,9 +426,10 @@ async function parseClaudeConversation(
   return exchanges;
 }
 
-/** Every .jsonl file under `dir`, at any depth. A missing folder yields
- * nothing. */
-export function* walkJsonlFiles(dir: string): Generator<string> {
+/** Every .jsonl file under `dir`, at any depth, leaving out the folder `skip`
+ * and everything in it. A missing folder yields nothing. */
+export function* walkJsonlFiles(dir: string, skip?: string): Generator<string> {
+  if (skip !== undefined && path.resolve(dir) === path.resolve(skip)) return;
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -438,7 +439,7 @@ export function* walkJsonlFiles(dir: string): Generator<string> {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      yield* walkJsonlFiles(full);
+      yield* walkJsonlFiles(full, skip);
     } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
       yield full;
     }

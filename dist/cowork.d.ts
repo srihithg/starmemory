@@ -109,5 +109,39 @@ export declare function deleteRecords(root: string, session: string): {
     files: string[];
     entries: number;
 };
+/** STARMEMORY_QUARANTINE_PATH, else ~/.config/starmemory/quarantine: where a
+ * forgotten Cowork record is set aside for a while, so a mistaken forget can
+ * be undone (src/forget.ts). */
+export declare function defaultQuarantineRoot(env?: NodeJS.ProcessEnv): string;
+export declare const DEFAULT_QUARANTINE_DAYS = 7;
+/** STARMEMORY_QUARANTINE_DAYS, else 7. `0` deletes a forgotten record at once.
+ * A value that is not a number of days keeps the default: what a purge
+ * deletes cannot be brought back. */
+export declare function defaultQuarantineDays(env?: NodeJS.ProcessEnv): number;
+export interface Quarantine {
+    root: string;
+    days: number;
+}
+/** How a set-aside record's name ends. Not `.jsonl`, so nothing that looks for
+ * transcripts, sync's walk and `read` among them, takes one for a record. */
+export declare const QUARANTINE_SUFFIX = ".jsonl.forgotten";
+/** Move every record of `session` into the quarantine, as
+ * <quarantine>/<project>/<session>.<when>-<random>.jsonl.forgotten, readable by
+ * the owner alone. The time and the random part keep a later forget of the
+ * same key from overwriting an earlier one. Its mtime becomes `now`, which is
+ * what purgeQuarantine counts from. Returns each record's old and new path and
+ * how many entries they held. */
+export declare function quarantineRecords(root: string, session: string, quarantine: Quarantine, now?: Date): {
+    moved: {
+        from: string;
+        to: string;
+    }[];
+    entries: number;
+};
+/** Delete the records set aside more than `days` ago. Only files named as
+ * quarantineRecords names them, and a project folder only once this emptied
+ * it, so a quarantine path pointed at a folder that holds anything else
+ * leaves the rest alone. Returns the files deleted. */
+export declare function purgeQuarantine({ root, days }: Quarantine, now?: number): string[];
 /** What the model is told after a remember. */
 export declare function describeRemember(result: RememberResult): string;

@@ -18,6 +18,7 @@
 // wherever it is shown, and it is written with the harness's control tags
 // escaped, so it cannot pass for the user's words or for something the
 // harness injected.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -309,6 +310,126 @@ export function deleteRecords(root: string, session: string): { files: string[];
     fs.rmSync(file, { force: true });
   }
   return { files, entries };
+}
+
+/** STARMEMORY_QUARANTINE_PATH, else ~/.config/starmemory/quarantine: where a
+ * forgotten Cowork record is set aside for a while, so a mistaken forget can
+ * be undone (src/forget.ts). */
+export function defaultQuarantineRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return env.STARMEMORY_QUARANTINE_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'quarantine');
+}
+
+export const DEFAULT_QUARANTINE_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** STARMEMORY_QUARANTINE_DAYS, else 7. `0` deletes a forgotten record at once.
+ * A value that is not a number of days keeps the default: what a purge
+ * deletes cannot be brought back. */
+export function defaultQuarantineDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.STARMEMORY_QUARANTINE_DAYS;
+  const days = Number(raw);
+  return raw !== undefined && raw.trim() !== '' && Number.isFinite(days) && days >= 0 ? days : DEFAULT_QUARANTINE_DAYS;
+}
+
+export interface Quarantine {
+  root: string;
+  days: number;
+}
+
+/** How a set-aside record's name ends. Not `.jsonl`, so nothing that looks for
+ * transcripts, sync's walk and `read` among them, takes one for a record. */
+export const QUARANTINE_SUFFIX = '.jsonl.forgotten';
+
+/** Owner-only, since what it holds is what the user asked to forget. */
+function privateDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+
+/** A rename, or where the quarantine is on another volume, a copy that never
+ * overwrites and then a delete. */
+function moveFile(from: string, to: string): void {
+  try {
+    fs.renameSync(from, to);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+    fs.rmSync(from, { force: true });
+  }
+}
+
+/** Move every record of `session` into the quarantine, as
+ * <quarantine>/<project>/<session>.<when>-<random>.jsonl.forgotten, readable by
+ * the owner alone. The time and the random part keep a later forget of the
+ * same key from overwriting an earlier one. Its mtime becomes `now`, which is
+ * what purgeQuarantine counts from. Returns each record's old and new path and
+ * how many entries they held. */
+export function quarantineRecords(
+  root: string,
+  session: string,
+  quarantine: Quarantine,
+  now: Date = new Date()
+): { moved: { from: string; to: string }[]; entries: number } {
+  const moved: { from: string; to: string }[] = [];
+  let entries = 0;
+  const when = now.toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '');
+  for (const from of findRecords(root, session)) {
+    const count = countEntries(from);
+    privateDir(quarantine.root);
+    const dir = path.join(quarantine.root, path.basename(path.dirname(from)));
+    privateDir(dir);
+    let to: string;
+    do {
+      to = path.join(dir, `${session}.${when}-${crypto.randomBytes(4).toString('hex')}${QUARANTINE_SUFFIX}`);
+    } while (fs.existsSync(to));
+    moveFile(from, to);
+    fs.chmodSync(to, 0o600);
+    fs.utimesSync(to, now, now);
+    moved.push({ from, to });
+    entries += count;
+  }
+  return { moved, entries };
+}
+
+function listDir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/** Delete the records set aside more than `days` ago. Only files named as
+ * quarantineRecords names them, and a project folder only once this emptied
+ * it, so a quarantine path pointed at a folder that holds anything else
+ * leaves the rest alone. Returns the files deleted. */
+export function purgeQuarantine({ root, days }: Quarantine, now: number = Date.now()): string[] {
+  const cutoff = now - days * DAY_MS;
+  const purged: string[] = [];
+  for (const project of listDir(root)) {
+    const dir = path.join(root, project);
+    let emptied = false;
+    for (const name of listDir(dir)) {
+      if (!name.endsWith(QUARANTINE_SUFFIX)) continue;
+      const file = path.join(dir, name);
+      try {
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.mtimeMs >= cutoff) continue;
+        fs.rmSync(file, { force: true });
+        purged.push(file);
+        emptied = true;
+      } catch {
+        // gone already, or not ours to remove; the next sync looks again
+      }
+    }
+    if (!emptied) continue;
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      // not empty: a record set aside more recently
+    }
+  }
+  return purged;
 }
 
 /** What the model is told after a remember. */

@@ -13,7 +13,8 @@
 // A Cowork session runs in the cloud and may have read a page written to steer
 // it, so the app's server serves the Cowork records alone unless the user opts
 // in (STARMEMORY_SCOPE, cowork.ts): search and read see nothing else, and
-// forget refuses a Claude Code or Codex session.
+// forget refuses a Claude Code or Codex session and sets a record aside for a
+// few days rather than deleting it.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -33,6 +34,8 @@ import {
   RefusedError,
   SESSION_KEY_PATTERN,
   defaultCoworkRoot,
+  defaultQuarantineDays,
+  defaultQuarantineRoot,
   defaultRememberDailyLimit,
   describeRemember,
   remember,
@@ -59,6 +62,7 @@ const ARCHIVE_ROOT = defaultArchiveRoot();
 const COWORK_ROOT = defaultCoworkRoot();
 const FORGOTTEN_PATH = defaultForgottenPath();
 const COWORK_ONLY = serverScope() === 'cowork';
+const QUARANTINE = { root: defaultQuarantineRoot(), days: defaultQuarantineDays() };
 const dailyCap = new DailyCap(defaultRememberDailyLimit());
 /** Read on every call, not cached: another server process (Claude Code's, or
  * the desktop app's) may have forgotten a session since. */
@@ -105,17 +109,19 @@ function realpathOf(p: string): string | undefined {
   }
 }
 
-/** A transcript's name, under one of READ_ROOTS. `file` is checked as written,
- * or resolved (realpathOf) on both sides when it is what will be read. */
+/** A transcript's name, under one of READ_ROOTS and not in the quarantine,
+ * wherever that was pointed. `file` is checked as written, or resolved
+ * (realpathOf) on both sides when it is what will be read. */
 function isReadable(filePath: string, { resolved }: { resolved: boolean }): boolean {
   const file = resolved ? filePath : path.resolve(filePath);
   if (!TRANSCRIPT_NAME.test(file)) return false;
-  return READ_ROOTS.some((root) => {
+  const under = (root: string) => {
     const base = resolved ? realpathOf(root) : path.resolve(root);
     if (!base) return false;
     const relative = path.relative(base, file);
     return relative !== '' && relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative);
-  });
+  };
+  return !under(QUARANTINE.root) && READ_ROOTS.some(under);
 }
 
 
@@ -294,8 +300,11 @@ server.registerTool(
     description: COWORK_ONLY
       ? 'Forget this Cowork session when the user asks not to record it, in any words ("don\'t record this", "keep this ' +
         'off the record", "forget this conversation"), before its first entry as well as after. It leaves search and ' +
-        'read from that moment and remember refuses it afterwards. Its Cowork record, archive copy and summary are ' +
-        'removed at once, and a background sync deletes its indexed exchanges. ' +
+        'read from that moment and remember refuses it afterwards. ' +
+        (QUARANTINE.days > 0
+          ? `Its Cowork record is set aside for ${QUARANTINE.days} ${QUARANTINE.days === 1 ? 'day' : 'days'}, so that a forget the user did not mean can be undone, then deleted; `
+          : 'Its Cowork record is deleted at once; ') +
+        'its archive copy and summary are removed at once, and a background sync deletes its indexed exchanges. ' +
         'This server serves Cowork records only, so it refuses a Claude Code or Codex session id.'
       : 'Forget a session when the user asks not to record it, in any words ("don\'t record this", "keep this off the ' +
         'record", "forget this conversation"). Its Cowork record, archive copy and summary are removed at once and it ' +
@@ -320,7 +329,9 @@ server.registerTool(
         forgottenPath: FORGOTTEN_PATH,
         archiveRoot: ARCHIVE_ROOT,
         store,
-        ...(COWORK_ONLY ? { coworkOnly: { dirs: harnessTranscriptDirs() } } : {}),
+        // The quarantine goes with the scope: a forget a local Claude Code or
+        // Codex session asks for deletes at once, as it always has.
+        ...(COWORK_ONLY ? { coworkOnly: { dirs: harnessTranscriptDirs() }, quarantine: QUARANTINE } : {}),
       });
       syncSoon();
       const note = result.pendingRows > 0 ? syncOnHoldNote('deleting the indexed exchanges, which stay hidden until then') : '';
