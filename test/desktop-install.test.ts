@@ -415,6 +415,34 @@ describe('desktop-install while the Claude app is running', () => {
     expect(readConfig()).toEqual(existingConfig);
   });
 
+  it('without --restart, refuses the app\'s own config from inside the app whatever it can tell of the app, and edits another', async () => {
+    writeConfig(existingConfig);
+    const inside = { ...env, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' };
+
+    for (const answer of [true, false, undefined]) {
+      const said: string[] = [];
+      const code = await main(['--no-prepare', '--config', configFile], {
+        env: inside,
+        platform: 'darwin',
+        appRunning: () => answer,
+        appConfig: configFile,
+        out: () => {},
+        err: (l: string) => said.push(l),
+      });
+
+      expect(code).toBe(1);
+      expect(said.join('\n')).toContain('Run the same command in Terminal instead');
+      expect(readConfig()).toEqual(existingConfig);
+      expect(backups()).toEqual([]);
+      expect(fs.existsSync(launcherDir(env))).toBe(false);
+    }
+
+    const code = await main(['--no-prepare', '--config', configFile], { ...quiet, env: inside, platform: 'darwin', appRunning: () => true, appConfig: path.join(dir, 'the-apps-own.json') });
+
+    expect(code).toBe(0);
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+  });
+
   it('looks again just before writing, after preparing the copy, and changes nothing if the app was opened meanwhile', async () => {
     writeConfig(existingConfig);
     const events: string[] = [];

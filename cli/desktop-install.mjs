@@ -436,16 +436,15 @@ export async function main(argv, deps = {}) {
     return 1;
   }
 
-  const inside = insideClaudeApp(env);
-  const insideRefusal =
-    "starmemory: this runs inside the Claude app. It changes the app's config only while the app is closed, and quitting the app would end this session, so nothing was changed. Run the same command in Terminal instead.";
-  if (inside && opts.restart) {
-    err(insideRefusal);
-    return 1;
-  }
   // Only the app's own config can be overwritten by the running app; a file
   // named with --config elsewhere, a test's for one, is not its to touch.
   const appsOwn = sameFile(configFile, appConfig, platform);
+  // From inside the app, the app is running whatever the check below makes of
+  // it, and quitting it would end the session asking.
+  if (insideClaudeApp(env) && (opts.restart || appsOwn)) {
+    err("starmemory: this runs inside the Claude app. It changes the app's config only while the app is closed, and quitting the app would end this session, so nothing was changed. Run the same command in Terminal instead.");
+    return 1;
+  }
   const running = appsOwn ? appRunning() : false;
   if (running === undefined && (platform === 'darwin' || platform === 'win32')) {
     err(
@@ -459,10 +458,6 @@ export async function main(argv, deps = {}) {
     return 1;
   }
   if (running && !opts.restart) {
-    if (inside) {
-      err(insideRefusal);
-      return 1;
-    }
     err('starmemory: the Claude app is running, and it can overwrite changes made to its config while it is open, so nothing was changed.');
     err('Quit it (Cmd+Q on a Mac) and run this again, or add --restart to have this quit the app, make the change and open it again.');
     return 1;
