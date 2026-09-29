@@ -28,6 +28,7 @@ import {
   quarantineRecords,
   recordIdentity,
   remember,
+  removeIfUnchanged,
   serverScope,
   sessionKeyProblem,
   setAsideExpiry,
@@ -313,6 +314,87 @@ describe('which record a file holds', () => {
 
     expect(recordIdentity(file)).toBe(`${fs.statSync(file).dev}:${ino}:${header.trim()}`);
     expect(recordIdentity(path.join(root, 'starmemory', 'none.jsonl'))).toBeUndefined();
+  });
+});
+
+describe('removing a record only if nothing was written to it', () => {
+  const addEntry = (file: string) => {
+    const [, user, assistant] = fs.readFileSync(file, 'utf8').split('\n');
+    fs.appendFileSync(file, `${user}\n${assistant}\n`);
+  };
+  const asides = (file: string) => fs.readdirSync(path.dirname(file)).filter((name) => name.endsWith('.removing'));
+
+  it('deletes a record that is as it was judged', () => {
+    const { file } = remember(root, entry());
+    expect(removeIfUnchanged(file, fs.statSync(file))).toBe(true);
+    expect(fs.readdirSync(path.dirname(file))).toEqual([]);
+  });
+
+  it('puts back a record written to since, as the same file, so a remember that has it open still writes into it', () => {
+    const { file } = remember(root, entry());
+    const seen = fs.statSync(file);
+    addEntry(file);
+
+    expect(removeIfUnchanged(file, seen)).toBe(false);
+    expect({ entries: countEntries(file), ino: fs.statSync(file).ino, asides: asides(file) }).toEqual({ entries: 2, ino: seen.ino, asides: [] });
+  });
+
+  it('leaves it aside, and never writes over a record a remember starts at the path just as it is put back', () => {
+    const { file } = remember(root, entry());
+    const seen = fs.statSync(file);
+    addEntry(file);
+    let started = false;
+    const start = () => {
+      if (started) return;
+      started = true;
+      remember(root, entry({ found: 'a new record, which the user was told is recorded' }));
+    };
+    // Whichever way the put-back looks for the path, the new record arrives first.
+    const realExists = fs.existsSync;
+    const realLink = fs.linkSync;
+    vi.spyOn(fs, 'existsSync').mockImplementation(((p: fs.PathLike) => {
+      const found = realExists(p);
+      if (p === file) start();
+      return found;
+    }) as typeof fs.existsSync);
+    vi.spyOn(fs, 'linkSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (to === file) start();
+      return realLink(from, to);
+    }) as typeof fs.linkSync);
+
+    expect(removeIfUnchanged(file, seen)).toBe(false);
+    vi.restoreAllMocks();
+    const [aside] = asides(file);
+    expect({
+      atPath: fs.readFileSync(file, 'utf8').includes('a new record'),
+      entries: countEntries(file),
+      aside: countEntries(path.join(path.dirname(file), aside)),
+    }).toEqual({ atPath: true, entries: 1, aside: 2 });
+  });
+
+  it('puts it back by a copy where the file system has no hard links, and never over a record at the path', () => {
+    const noLink = (before?: () => void) =>
+      vi.spyOn(fs, 'linkSync').mockImplementation((() => {
+        before?.();
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      }) as typeof fs.linkSync);
+    const { file } = remember(root, entry());
+    fs.chmodSync(file, 0o640);
+    let seen = fs.statSync(file);
+    addEntry(file);
+    const held = fs.readFileSync(file, 'utf8');
+    noLink();
+
+    expect(removeIfUnchanged(file, seen)).toBe(false);
+    expect({ held: fs.readFileSync(file, 'utf8'), mode: fs.statSync(file).mode & 0o777, asides: asides(file) }).toEqual({ held, mode: 0o640, asides: [] });
+
+    seen = fs.statSync(file);
+    addEntry(file);
+    vi.restoreAllMocks();
+    noLink(() => remember(root, entry({ session: entry().session, found: 'a new record' })));
+    expect(removeIfUnchanged(file, seen)).toBe(false);
+    vi.restoreAllMocks();
+    expect({ entries: countEntries(file), aside: countEntries(path.join(path.dirname(file), asides(file)[0])) }).toEqual({ entries: 1, aside: 3 });
   });
 });
 

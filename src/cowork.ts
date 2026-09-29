@@ -463,9 +463,55 @@ export function removeIfUnchanged(file: string, seen: fs.Stats, into?: (aside: s
   return true;
 }
 
-/** `aside` back at `file`, unless a new record has the path by then. */
-function putBack(aside: string, file: string): void {
-  if (!fs.existsSync(file)) fs.renameSync(aside, file);
+/** The codes a file system gives for a hard link it cannot make: EPERM and
+ * ENOTSUP or EOPNOTSUPP where it has none (FAT, exFAT, some network shares),
+ * EISDIR for the same on Windows, EMLINK when the file has too many. */
+const NO_HARD_LINK = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EISDIR', 'EMLINK']);
+
+/** `aside` back at `file`, unless a new record has the path by then; it then
+ * stays where it is. A hard link, which fails rather than writing over a file
+ * already there, then the aside name unlinked: a remember that had the record
+ * open still writes into it. Returns true when it was put back. */
+function putBack(aside: string, file: string): boolean {
+  try {
+    fs.linkSync(aside, file);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? '';
+    if (code === 'EEXIST') return false;
+    if (!NO_HARD_LINK.has(code)) throw error;
+    return copyBack(aside, file);
+  }
+  fs.rmSync(aside, { force: true });
+  return true;
+}
+
+/** putBack where there are no hard links: a file created at `file` only if
+ * none is there, never written over, with what `aside` holds appended in one
+ * write, and again whatever was added to `aside` meanwhile. A remember that
+ * starts a record at the path between the create and the write keeps its
+ * lines, ahead of these. A write landing in `aside` after the last read is
+ * lost, as with any delete here. */
+function copyBack(aside: string, file: string): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'ax', fs.lstatSync(aside).mode & 0o777);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+  try {
+    let copied = 0;
+    for (;;) {
+      const held = fs.readFileSync(aside);
+      if (held.length <= copied) break;
+      fs.writeSync(fd, held.subarray(copied));
+      copied = held.length;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.rmSync(aside, { force: true });
+  return true;
 }
 
 /** A rename, or where the quarantine is on another volume, a copy that never
