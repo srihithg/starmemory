@@ -140,6 +140,9 @@ export declare const QUARANTINE_SUFFIX = ".jsonl.forgotten";
 /** When a set-aside record may be deleted, read from its name
  * (quarantineRecord), or undefined for a name that does not carry one. */
 export declare function setAsideExpiry(name: string): number | undefined;
+/** How long a file stays aside before sweepAsides deals with it: far longer
+ * than a removal takes, so one still under way is never raced. */
+export declare const ASIDE_SWEEP_MS: number;
 /** Delete `file`, or with `into` move it elsewhere, only if it is still what
  * `seen`, the stat it was judged by, describes: a remember can add an entry to
  * a record while a sync decides to remove it, and is told the entry was
@@ -147,9 +150,10 @@ export declare function setAsideExpiry(name: string): number | undefined;
  * starts a new record at the path, while one that already had it open writes
  * into the renamed file, which is what is compared, and what `into` is given.
  * Changed, it is put back, unless a new record has the path by then; it then
- * stays aside, under a name nothing reads. When `into` throws, it is put back
- * the same way and the error goes on. A write landing between the compare and
- * the delete is still lost. Returns true when the file was taken. */
+ * stays aside, under a name only sweepAsides reads. When `into` throws, it is
+ * put back the same way and the error goes on. A write landing between the
+ * compare and the delete is still lost. Returns true when the file was
+ * taken. */
 export declare function removeIfUnchanged(file: string, seen: fs.Stats, into?: (aside: string) => void): boolean;
 export interface SetAside {
     from: string;
@@ -188,5 +192,31 @@ export declare function findSetAside(root: string, session: string): string[];
  * it, so a quarantine path pointed at a folder that holds anything else
  * leaves the rest alone. Returns the files deleted. */
 export declare function purgeQuarantine({ root, days }: Quarantine, now?: number): string[];
+export interface SweptAside {
+    aside: string;
+    /** Where it went: its own path again, or the quarantine. Undefined when it
+     * was deleted. */
+    to?: string;
+}
+/** Deal with the files removeIfUnchanged took aside and never finished with:
+ * a changed one whose path a new record had by then, or one a process
+ * stopped with between the rename and the delete. Nothing else reads that
+ * name, so what was forgotten would otherwise stay on disk. Only the Cowork
+ * records folder and, when named, the quarantine are looked in, each a
+ * project folder deep, and only at files aside for longer than
+ * ASIDE_SWEEP_MS by the time in their name. A record is put back (putBack)
+ * when its path is free and its session is not forgotten (`isForgotten`,
+ * given the record's path). A forgotten session's is set aside in the
+ * quarantine, under the name quarantineRecord gives it, or deleted when the
+ * quarantine keeps nothing, at 0 days or when none was named. Any other,
+ * whose path a new record has, is deleted. A set-aside record taken aside by
+ * the purge is put back under its own name, to wait out its time as before,
+ * or deleted if that name is taken. */
+export declare function sweepAsides({ coworkRoot, quarantine, isForgotten, now, }: {
+    coworkRoot: string;
+    quarantine?: Quarantine;
+    isForgotten: (record: string) => boolean;
+    now?: number;
+}): SweptAside[];
 /** What the model is told after a remember. */
 export declare function describeRemember(result: RememberResult): string;

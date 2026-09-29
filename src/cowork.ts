@@ -421,6 +421,16 @@ function privateDir(dir: string): void {
   fs.chmodSync(dir, 0o700);
 }
 
+/** How the name of a file removeIfUnchanged takes aside ends: its own name,
+ * then when it was taken aside and a random part. Nothing that reads records,
+ * transcripts or the quarantine takes such a name; sweepAsides finds them. */
+const ASIDE_SUFFIX = '.removing';
+const ASIDE_NAME = /^(.+)\.(\d{1,16})-[0-9a-f]{8}\.removing$/;
+
+/** How long a file stays aside before sweepAsides deals with it: far longer
+ * than a removal takes, so one still under way is never raced. */
+export const ASIDE_SWEEP_MS = 10 * 60 * 1000;
+
 /** Nothing was written to the file `now` describes since `seen`. */
 function unchangedSince(now: fs.Stats, seen: fs.Stats): boolean {
   return now.dev === seen.dev && now.ino === seen.ino && now.size === seen.size && now.mtimeMs === seen.mtimeMs;
@@ -433,11 +443,12 @@ function unchangedSince(now: fs.Stats, seen: fs.Stats): boolean {
  * starts a new record at the path, while one that already had it open writes
  * into the renamed file, which is what is compared, and what `into` is given.
  * Changed, it is put back, unless a new record has the path by then; it then
- * stays aside, under a name nothing reads. When `into` throws, it is put back
- * the same way and the error goes on. A write landing between the compare and
- * the delete is still lost. Returns true when the file was taken. */
+ * stays aside, under a name only sweepAsides reads. When `into` throws, it is
+ * put back the same way and the error goes on. A write landing between the
+ * compare and the delete is still lost. Returns true when the file was
+ * taken. */
 export function removeIfUnchanged(file: string, seen: fs.Stats, into?: (aside: string) => void): boolean {
-  const aside = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.removing`;
+  const aside = `${file}.${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ASIDE_SUFFIX}`;
   try {
     fs.renameSync(file, aside);
   } catch (error) {
@@ -658,6 +669,80 @@ export function purgeQuarantine({ root, days }: Quarantine, now: number = Date.n
     }
   }
   return purged;
+}
+
+/** A folder itself, not a link to one elsewhere. */
+function isFolder(dir: string): boolean {
+  try {
+    return fs.lstatSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export interface SweptAside {
+  aside: string;
+  /** Where it went: its own path again, or the quarantine. Undefined when it
+   * was deleted. */
+  to?: string;
+}
+
+/** Deal with the files removeIfUnchanged took aside and never finished with:
+ * a changed one whose path a new record had by then, or one a process
+ * stopped with between the rename and the delete. Nothing else reads that
+ * name, so what was forgotten would otherwise stay on disk. Only the Cowork
+ * records folder and, when named, the quarantine are looked in, each a
+ * project folder deep, and only at files aside for longer than
+ * ASIDE_SWEEP_MS by the time in their name. A record is put back (putBack)
+ * when its path is free and its session is not forgotten (`isForgotten`,
+ * given the record's path). A forgotten session's is set aside in the
+ * quarantine, under the name quarantineRecord gives it, or deleted when the
+ * quarantine keeps nothing, at 0 days or when none was named. Any other,
+ * whose path a new record has, is deleted. A set-aside record taken aside by
+ * the purge is put back under its own name, to wait out its time as before,
+ * or deleted if that name is taken. */
+export function sweepAsides({
+  coworkRoot,
+  quarantine,
+  isForgotten,
+  now = Date.now(),
+}: {
+  coworkRoot: string;
+  quarantine?: Quarantine;
+  isForgotten: (record: string) => boolean;
+  now?: number;
+}): SweptAside[] {
+  const swept: SweptAside[] = [];
+  const roots = [
+    { root: coworkRoot, suffix: '.jsonl' },
+    ...(quarantine ? [{ root: quarantine.root, suffix: QUARANTINE_SUFFIX }] : []),
+  ];
+  for (const { root, suffix } of roots) {
+    for (const project of listDir(root)) {
+      const dir = path.join(root, project);
+      if (!isFolder(dir)) continue;
+      for (const name of listDir(dir)) {
+        const match = ASIDE_NAME.exec(name);
+        if (!match || !match[1].endsWith(suffix) || now - Number(match[2]) < ASIDE_SWEEP_MS) continue;
+        const aside = path.join(dir, name);
+        const original = path.join(dir, match[1]);
+        try {
+          if (!fs.lstatSync(aside).isFile()) continue;
+          let to: string | undefined;
+          if (suffix === QUARANTINE_SUFFIX || !isForgotten(original)) {
+            if (putBack(aside, original)) to = original;
+          } else if (quarantine && quarantine.days > 0) {
+            to = quarantineRecord(original, quarantine, new Date(now), aside).to;
+          }
+          if (to === undefined) fs.rmSync(aside, { force: true });
+          swept.push({ aside, to });
+        } catch {
+          // gone already, or not movable now; the next sync looks again
+        }
+      }
+    }
+  }
+  return swept;
 }
 
 /** What the model is told after a remember. */

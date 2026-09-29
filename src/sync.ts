@@ -8,7 +8,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionsOfName, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineIfUnchanged, recordIdentity, removeIfUnchanged, type Quarantine } from './cowork.js';
+import {
+  defaultCoworkRoot,
+  defaultQuarantineRoot,
+  purgeQuarantine,
+  quarantineIfUnchanged,
+  recordIdentity,
+  removeIfUnchanged,
+  sweepAsides,
+  type Quarantine,
+} from './cowork.js';
 import { defaultForgottenPath, forgetSessions, isForgotten, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations, type SummaryCandidate, type SummaryOptions } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -432,6 +441,18 @@ export async function syncAll(
   const forgotten = readForgotten(forgottenPath);
   const log = options.log ?? ((line: string) => process.stderr.write(`${line}\n`));
   const quarantine = options.quarantine;
+  // What a removal took aside and never finished with (sweepAsides): a record
+  // put back is synced below as any other. Before the purge, so a set-aside
+  // record put back is purged in its time.
+  const swept = sweepAsides({
+    coworkRoot,
+    quarantine,
+    now,
+    isForgotten: (record) => isForgotten(sessionsOfName(record), readForgotten(forgottenPath)),
+  });
+  for (const { aside, to } of swept) {
+    log(`starmemory: ${to === undefined ? `deleted ${aside}` : `moved ${aside} to ${to}`}, left aside by a removal that did not finish`);
+  }
   if (quarantine) {
     for (const file of purgeQuarantine(quarantine, now)) {
       log(`starmemory: deleted ${file}, a Cowork record a forget set aside, now that its time there is up`);

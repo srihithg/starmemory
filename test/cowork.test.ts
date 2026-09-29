@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import {
+  ASIDE_SWEEP_MS,
   DEFAULT_PROJECT,
   DEFAULT_QUARANTINE_DAYS,
   DEFAULT_REMEMBER_DAILY_LIMIT,
@@ -23,6 +24,7 @@ import {
   describeRemember,
   escapeControlTags,
   findRecords,
+  findSetAside,
   projectSlug,
   purgeQuarantine,
   quarantineRecords,
@@ -32,6 +34,7 @@ import {
   serverScope,
   sessionKeyProblem,
   setAsideExpiry,
+  sweepAsides,
 } from '../src/cowork.js';
 import { detectHarness, parseConversation } from '../src/parser.js';
 
@@ -381,12 +384,13 @@ describe('removing a record only if nothing was written to it', () => {
     const { file } = remember(root, entry());
     fs.chmodSync(file, 0o640);
     let seen = fs.statSync(file);
+    const mode = seen.mode & 0o777;
     addEntry(file);
     const held = fs.readFileSync(file, 'utf8');
     noLink();
 
     expect(removeIfUnchanged(file, seen)).toBe(false);
-    expect({ held: fs.readFileSync(file, 'utf8'), mode: fs.statSync(file).mode & 0o777, asides: asides(file) }).toEqual({ held, mode: 0o640, asides: [] });
+    expect({ held: fs.readFileSync(file, 'utf8'), mode: fs.statSync(file).mode & 0o777, asides: asides(file) }).toEqual({ held, mode, asides: [] });
 
     seen = fs.statSync(file);
     addEntry(file);
@@ -395,6 +399,88 @@ describe('removing a record only if nothing was written to it', () => {
     expect(removeIfUnchanged(file, seen)).toBe(false);
     vi.restoreAllMocks();
     expect({ entries: countEntries(file), aside: countEntries(path.join(path.dirname(file), asides(file)[0])) }).toEqual({ entries: 1, aside: 3 });
+  });
+});
+
+describe('what a removal left aside', () => {
+  const now = Date.now();
+  const quarantine = () => ({ root: path.join(dir, 'quarantine'), days: 7 });
+  /** `file` as removeIfUnchanged takes it aside, `ago` ms before now. */
+  const leaveAside = (file: string, ago = ASIDE_SWEEP_MS + 1) => {
+    const aside = `${file}.${now - ago}-0a1b2c3d.removing`;
+    fs.renameSync(file, aside);
+    return aside;
+  };
+  const sweep = (forgotten: string[] = [], q: { root: string; days: number } | null = quarantine()) =>
+    sweepAsides({ coworkRoot: root, quarantine: q ?? undefined, now, isForgotten: (record) => forgotten.includes(path.basename(record, '.jsonl')) });
+
+  it('is left alone for a while, since the removal may still be under way', () => {
+    const { file } = remember(root, entry());
+    const aside = leaveAside(file, ASIDE_SWEEP_MS - 1000);
+
+    expect(sweep()).toEqual([]);
+    expect(fs.existsSync(aside)).toBe(true);
+  });
+
+  it('is put back, as the same file, when its path is free and its session is not forgotten', () => {
+    const { file } = remember(root, entry());
+    const { ino } = fs.statSync(file);
+    const aside = leaveAside(file);
+
+    expect(sweep()).toEqual([{ aside, to: file }]);
+    expect({ ino: fs.statSync(file).ino, aside: fs.existsSync(aside) }).toEqual({ ino, aside: false });
+  });
+
+  it('is set aside in the quarantine when its session is forgotten, even with a new record at its path, and deleted where the quarantine keeps nothing', () => {
+    const { file } = remember(root, entry());
+    const aside = leaveAside(file);
+    remember(root, entry({ found: 'a new record at the path' }));
+
+    const [swept, ...more] = sweep([entry().session]);
+    expect({ swept, more }).toEqual({ swept: { aside, to: expect.stringMatching(new RegExp(`\\${QUARANTINE_SUFFIX}$`)) }, more: [] });
+    expect(findSetAside(quarantine().root, entry().session)).toEqual([swept.to]);
+    expect({ entries: countEntries(swept.to!), expiry: setAsideExpiry(path.basename(swept.to!)), atPath: countEntries(file) })
+      .toEqual({ entries: 1, expiry: now + 7 * 24 * 60 * 60 * 1000, atPath: 1 });
+
+    const other = leaveAside(remember(root, entry({ session: 'other' })).file);
+    expect(sweep(['other'], { ...quarantine(), days: 0 })).toEqual([{ aside: other }]);
+    expect(fs.existsSync(other)).toBe(false);
+  });
+
+  it('is deleted when a new record has its path and its session is not forgotten', () => {
+    const { file } = remember(root, entry());
+    const aside = leaveAside(file);
+    remember(root, entry({ found: 'a new record at the path' }));
+
+    expect(sweep()).toEqual([{ aside }]);
+    expect({ aside: fs.existsSync(aside), entries: countEntries(file) }).toEqual({ aside: false, entries: 1 });
+  });
+
+  it('in the quarantine, is put back under its set-aside name to wait out its time, and is looked for only when the quarantine is named', () => {
+    remember(root, entry());
+    const [moved] = quarantineRecords(root, entry().session, quarantine(), new Date(now - 8 * 24 * 60 * 60 * 1000)).moved;
+    const aside = leaveAside(moved.to);
+
+    expect(sweep([], null)).toEqual([]);
+    expect(sweep()).toEqual([{ aside, to: moved.to }]);
+    expect(purgeQuarantine(quarantine(), now)).toEqual([moved.to]);
+  });
+
+  it('is looked for only a project folder deep in the records folder and the quarantine, never through a link', () => {
+    remember(root, entry());
+    const old = now - ASIDE_SWEEP_MS - 1;
+    const elsewhere = path.join(dir, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    const outside = `${path.join(elsewhere, 'kept.jsonl')}.${old}-0a1b2c3d.removing`;
+    fs.writeFileSync(outside, '{}\n');
+    fs.symlinkSync(elsewhere, path.join(root, 'linked'), 'junction');
+    const atRoot = `${path.join(root, 'loose.jsonl')}.${old}-0a1b2c3d.removing`;
+    fs.writeFileSync(atRoot, '{}\n');
+    const notRecord = `${path.join(root, 'starmemory', 'notes.txt')}.${old}-0a1b2c3d.removing`;
+    fs.writeFileSync(notRecord, 'notes\n');
+
+    expect(sweep()).toEqual([]);
+    expect([outside, atRoot, notRecord].map((f) => fs.existsSync(f))).toEqual([true, true, true]);
   });
 });
 

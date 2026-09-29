@@ -12,7 +12,7 @@ import { VectorIndex } from '../src/vector-index.js';
 import { EMBEDDING_DIM, initEmbeddings } from '../src/embeddings.js';
 import { syncAll } from '../src/sync.js';
 import { readArchive, summaryPathFor } from '../src/archive.js';
-import { findSetAside, quarantineRecords, remember } from '../src/cowork.js';
+import { countEntries, findSetAside, quarantineRecords, remember } from '../src/cowork.js';
 import { forget, readForgotten } from '../src/forget.js';
 import { search } from '../src/search.js';
 import { TextIndex } from '../src/text-index.js';
@@ -841,6 +841,25 @@ describe('the quarantine, as sync sees it', () => {
     expect(fs.existsSync(path.join(archiveRoot, 'cowork', 'lanterns', 'undo.jsonl.gz'))).toBe(true);
     expect((await sync({}, { text })).exchangesIndexed).toBe(0);
     expect(stored()).toHaveLength(3);
+  }, 120_000);
+
+  it('sweeps up what a removal took aside and did not finish: a record put back and indexed, a forgotten one set aside', async () => {
+    const kept = remember(coworkRoot, entry('kept', 'Trim it flat.')).file;
+    const gone = remember(coworkRoot, entry('gone', 'Every forty hours of burning.')).file;
+    // As a process that stopped between the rename and the delete leaves them.
+    const then = Date.now() - 11 * 60 * 1000;
+    for (const file of [kept, gone]) fs.renameSync(file, `${file}.${then}-0a1b2c3d.removing`);
+    fs.writeFileSync(forgottenPath, 'gone\n');
+
+    await sync({ quarantine: quarantine() });
+
+    expect({
+      kept: fs.existsSync(kept),
+      gone: fs.existsSync(gone),
+      left: fs.readdirSync(path.dirname(kept)).filter((name) => name.endsWith('.removing')),
+      setAside: findSetAside(quarantineRoot, 'gone').map(countEntries),
+      stored: stored(),
+    }).toEqual({ kept: true, gone: false, left: [], setAside: [1], stored: [['kept', 'Trim it flat.']] });
   }, 120_000);
 
   it('a record moved back before any sync deleted its rows stores nothing twice', async () => {
