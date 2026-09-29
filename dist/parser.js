@@ -1,3 +1,13 @@
+// Parses transcripts into exchanges. Three kinds of file, told apart per file:
+//   - Claude Code: ~/.claude/projects/<slug>/<uuid>.jsonl, one message per line
+//   - Codex: ~/.codex/sessions/**/rollout-*.jsonl, session_meta + response_item lines
+//   - Cowork: ~/.config/starmemory/cowork/<project>/<session>.jsonl, written by
+//     the `remember` tool (src/cowork.ts): a cowork_session line, then Claude
+//     Code lines, so the Claude parser reads it and only the tag differs
+// Ported from episodic-memory's src/parser.ts, trimmed to the fields this engine
+// actually persists -- see design doc §07 "read 完整对话" for why raw-file reading
+// stays untouched regardless of storage engine, and §16 for the two harnesses.
+import fs from 'node:fs';
 import { openArchive } from './archive.js';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -344,6 +354,26 @@ async function parseClaudeConversation(filePath, project, archivePath, harness =
     }
     finalize();
     return exchanges;
+}
+/** Every .jsonl file under `dir`, at any depth. A missing folder yields
+ * nothing. */
+export function* walkJsonlFiles(dir) {
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    }
+    catch {
+        return;
+    }
+    for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            yield* walkJsonlFiles(full);
+        }
+        else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+            yield full;
+        }
+    }
 }
 /** Derives a project name the same way episodic-memory does: the JSONL file's
  * parent directory name (Claude Code's sanitized-cwd slug). */

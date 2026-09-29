@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detectHarness, parseConversation, projectFromPath, sessionIdsOf } from './parser.js';
+import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
 import { defaultCoworkRoot } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
@@ -26,19 +26,24 @@ import {
 import { VectorIndex } from './vector-index.js';
 import { TextIndex } from './text-index.js';
 
-/** Where each harness keeps its transcripts. The overrides are the ones the
- * harnesses themselves honour, so a profile that moved its config dir still
- * gets indexed. Missing directories are fine: walkJsonlFiles yields nothing.
- * Cowork writes nothing to this machine, so its entry is the records the
- * `remember` tool keeps (src/cowork.ts). */
-export function defaultTranscriptDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+/** Where Claude Code and Codex keep their transcripts. The overrides are the
+ * ones the harnesses themselves honour, so a profile that moved its config
+ * dir still gets indexed. */
+export function harnessTranscriptDirs(env: NodeJS.ProcessEnv = process.env): { claude: string; codex: string } {
   // Windows sets USERPROFILE, not HOME; os.homedir() is the last word.
   const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
-  return [
-    path.join(env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'), 'projects'),
-    path.join(env.CODEX_HOME ?? path.join(home, '.codex'), 'sessions'),
-    defaultCoworkRoot(env),
-  ];
+  return {
+    claude: path.join(env.CLAUDE_CONFIG_DIR ?? path.join(home, '.claude'), 'projects'),
+    codex: path.join(env.CODEX_HOME ?? path.join(home, '.codex'), 'sessions'),
+  };
+}
+
+/** Where each harness keeps its transcripts. Missing directories are fine:
+ * walkJsonlFiles yields nothing. Cowork writes nothing to this machine, so its
+ * entry is the records the `remember` tool keeps (src/cowork.ts). */
+export function defaultTranscriptDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const { claude, codex } = harnessTranscriptDirs(env);
+  return [claude, codex, defaultCoworkRoot(env)];
 }
 
 /** Which embedding model every vector in the store came from. */
@@ -125,23 +130,6 @@ export function syncTextIndex(store: StoreHandle, index: TextIndex): TextSyncRes
   }
 
   return { skipped: false, rebuilt, indexed: pending.length };
-}
-
-function* walkJsonlFiles(dir: string): Generator<string> {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      yield* walkJsonlFiles(full);
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      yield full;
-    }
-  }
 }
 
 export interface SyncOptions {

@@ -210,6 +210,11 @@ async function main() {
     fail('no installed copy of starmemory was found. Install it in Claude Code again (claude plugin install starmemory) or run desktop-install from a copy, then quit and reopen the Claude app.');
   }
   process.stderr.write(`starmemory: starting the MCP server from ${root}\n`);
+  // The app serves this server to Cowork sessions, which run in the cloud and
+  // can be steered by what they read there, so it gives them the Cowork
+  // records alone. STARMEMORY_SCOPE=all, copied into the app's entry by
+  // desktop-install, opts in to every harness's sessions.
+  process.env.STARMEMORY_SCOPE ??= 'cowork';
   // In this process, not a child: cli/mcp-server.mjs installs what is missing
   // and hands off to dist/, forwarding signals and watching stdin as it does
   // for Claude Code.

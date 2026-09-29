@@ -2,11 +2,16 @@ import { type SummaryOptions } from './summaries.js';
 import { type StoreHandle } from './store.js';
 import { VectorIndex } from './vector-index.js';
 import { TextIndex } from './text-index.js';
-/** Where each harness keeps its transcripts. The overrides are the ones the
- * harnesses themselves honour, so a profile that moved its config dir still
- * gets indexed. Missing directories are fine: walkJsonlFiles yields nothing.
- * Cowork writes nothing to this machine, so its entry is the records the
- * `remember` tool keeps (src/cowork.ts). */
+/** Where Claude Code and Codex keep their transcripts. The overrides are the
+ * ones the harnesses themselves honour, so a profile that moved its config
+ * dir still gets indexed. */
+export declare function harnessTranscriptDirs(env?: NodeJS.ProcessEnv): {
+    claude: string;
+    codex: string;
+};
+/** Where each harness keeps its transcripts. Missing directories are fine:
+ * walkJsonlFiles yields nothing. Cowork writes nothing to this machine, so its
+ * entry is the records the `remember` tool keeps (src/cowork.ts). */
 export declare function defaultTranscriptDirs(env?: NodeJS.ProcessEnv): string[];
 /** Which embedding model every vector in the store came from. */
 export declare const EMBEDDING_MODEL_KEY = "embedding_model";

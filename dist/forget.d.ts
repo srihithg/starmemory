@@ -28,16 +28,30 @@ export interface ForgetResult {
     /** The session was on the list already. */
     alreadyForgotten: boolean;
 }
-/** Forget `session`: put it on the list, then remove its Cowork record and the
- * archive copies and summaries kept of it. The caller starts a sync, which
- * deletes the rest. Throws RefusedError for a key that could not name a
- * session. */
-export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store }: {
+/** Where Claude Code and Codex keep their transcripts (sync.ts,
+ * harnessTranscriptDirs). */
+export interface HarnessDirs {
+    claude: string;
+    codex: string;
+}
+export interface ForgetOptions {
     coworkRoot: string;
     forgottenPath: string;
     archiveRoot: string;
     store?: StoreHandle;
-}): ForgetResult;
+    /** Given on a server that serves Cowork records only: a session Claude Code
+     * or Codex keeps is refused, and nothing is changed. */
+    coworkOnly?: {
+        dirs: HarnessDirs;
+    };
+}
+/** Forget `session`: put it on the list, then remove its Cowork record and the
+ * archive copies and summaries kept of it. The caller starts a sync, which
+ * deletes the rest. Throws RefusedError, changing nothing, for a key that
+ * could not name a session, or on a Cowork-only server for a Claude Code or
+ * Codex session. A key with nothing stored under it yet is listed all the
+ * same, so remember refuses it from the first entry. */
+export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly }: ForgetOptions): ForgetResult;
 /** What the model is told, to pass on to the user in a sentence. */
 export declare function describeForget(result: ForgetResult): string;
 /** The sync step: delete every stored conversation of a forgotten session, the

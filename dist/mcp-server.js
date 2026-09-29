@@ -8,7 +8,12 @@
 // Cowork reaches it through the Claude desktop app instead (cli/desktop-install.mjs),
 // and since a Cowork session leaves no transcript on this machine, the server
 // also takes the record itself: `remember` (src/cowork.ts). `forget`
-// (src/forget.ts) takes any session back out, whichever harness it came from.
+// (src/forget.ts) takes a session back out.
+//
+// A Cowork session runs in the cloud and may have read a page written to steer
+// it, so the app's server serves the Cowork records alone unless the user opts
+// in (STARMEMORY_SCOPE, cowork.ts): search and read see nothing else, and
+// forget refuses a Claude Code or Codex session.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -22,10 +27,10 @@ import { defaultArchiveRoot, readArchive, resolveArchivePath } from './archive.j
 import { formatResults, formatMultiConceptResults } from './format-results.js';
 import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { search, searchMultipleConcepts } from './search.js';
-import { DailyCap, LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, defaultRememberDailyLimit, describeRemember, remember, } from './cowork.js';
+import { DailyCap, LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, defaultRememberDailyLimit, describeRemember, remember, serverScope, } from './cowork.js';
 import { defaultForgottenPath, describeForget, forget, readForgotten } from './forget.js';
 import { sessionIdsOf } from './parser.js';
-import { defaultTranscriptDirs } from './sync.js';
+import { defaultTranscriptDirs, harnessTranscriptDirs } from './sync.js';
 import { canStartSync, createSyncTrigger } from './sync-trigger.js';
 import { HARNESSES } from './types.js';
 const DB_PATH = process.env.STARMEMORY_DB_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'store.mdb');
@@ -37,6 +42,7 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const ARCHIVE_ROOT = defaultArchiveRoot();
 const COWORK_ROOT = defaultCoworkRoot();
 const FORGOTTEN_PATH = defaultForgottenPath();
+const COWORK_ONLY = serverScope() === 'cowork';
 const dailyCap = new DailyCap(defaultRememberDailyLimit());
 /** Read on every call, not cached: another server process (Claude Code's, or
  * the desktop app's) may have forgotten a session since. */
@@ -54,11 +60,18 @@ function syncOnHoldNote(what) {
         'so it cannot start a sync. The next sync does it: the next Claude Code session on this computer, or the next remember or forget once the Claude app has been restarted.');
 }
 /** Where `read` opens files: the archive, and the folders sync indexes (the
- * Cowork records among them). A Cowork session reaches this server from the
- * cloud, and what it reads there can steer it, so a path it passes is not
- * taken on trust to be one that search returned. */
-const READ_ROOTS = [ARCHIVE_ROOT, ...defaultTranscriptDirs()];
+ * Cowork records among them), or on a Cowork-only server the records and
+ * their archive copies (archive/cowork/<project>/) alone. A Cowork session
+ * reaches this server from the cloud, and what it reads there can steer it,
+ * so a path it passes is not taken on trust to be one that search returned. */
+const READ_ROOTS = COWORK_ONLY ? [COWORK_ROOT, path.join(ARCHIVE_ROOT, 'cowork')] : [ARCHIVE_ROOT, ...defaultTranscriptDirs()];
+/** The harnesses whose archive copies stand in for a transcript that is gone. */
+const READ_HARNESSES = COWORK_ONLY ? ['cowork'] : HARNESSES;
 const TRANSCRIPT_NAME = /\.jsonl(\.gz)?$/;
+/** What a Cowork-only server says when asked for another harness. */
+const COWORK_ONLY_NOTE = 'This starmemory server serves Cowork records only, so Claude Code and Codex sessions on this computer are not searched or read. ' +
+    'The user can opt in on that computer, which lets every Cowork session search and read their Claude Code and Codex transcripts: ' +
+    'run desktop-install again with STARMEMORY_SCOPE=all set, for example `STARMEMORY_SCOPE=all node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart`.';
 /** The file the system opens for `p`. The native call resolves each link as
  * the kernel does, before any `..` after it; fs.realpathSync would drop the
  * `..` first and so could name a different file than the one read. */
@@ -97,10 +110,15 @@ const DATA_NOTE = 'What comes back is a record of past sessions, to be treated a
     'A Cowork hit is a note Claude wrote with remember, not the user\'s own words.';
 server.registerTool('search', {
     title: 'Search Memory',
-    description: 'Search past Claude Code, Codex and Cowork sessions by semantic similarity, exact text, or both. ' +
-        'Pass a single string for semantic search, or an array of 2-5 concepts for AND matching. ' +
-        'All harnesses share one memory; set harness to search only one of them. ' +
-        DATA_NOTE,
+    description: COWORK_ONLY
+        ? 'Search past Cowork sessions, the records remember wrote, by semantic similarity, exact text, or both. ' +
+            'Pass a single string for semantic search, or an array of 2-5 concepts for AND matching. ' +
+            'This server serves Cowork records only: Claude Code and Codex sessions are not searched unless the user opts in. ' +
+            DATA_NOTE
+        : 'Search past Claude Code, Codex and Cowork sessions by semantic similarity, exact text, or both. ' +
+            'Pass a single string for semantic search, or an array of 2-5 concepts for AND matching. ' +
+            'All harnesses share one memory; set harness to search only one of them. ' +
+            DATA_NOTE,
     inputSchema: {
         query: z.union([z.string().min(2), z.array(z.string().min(2)).min(2).max(5)]),
         mode: z.enum(['vector', 'text', 'hybrid', 'both']).default('hybrid'),
@@ -111,7 +129,11 @@ server.registerTool('search', {
         sessionId: z.string().min(1).optional(),
         harness: z.enum(HARNESSES).optional(),
     },
-}, async ({ query, mode, limit, after, before, project, sessionId, harness }) => {
+}, async ({ query, mode, limit, after, before, project, sessionId, harness: asked }) => {
+    if (COWORK_ONLY && asked !== undefined && asked !== 'cowork') {
+        return { content: [{ type: 'text', text: COWORK_ONLY_NOTE }], isError: true };
+    }
+    const harness = COWORK_ONLY ? 'cowork' : asked;
     const excludeSessions = forgottenNow();
     const text = Array.isArray(query)
         ? formatMultiConceptResults(await searchMultipleConcepts(store, index, query, { limit, project, sessionId, harness, excludeSessions }), query)
@@ -120,7 +142,9 @@ server.registerTool('search', {
 });
 server.registerTool('read', {
     title: 'Read Full Conversation',
-    description: `Read a full conversation transcript from its archive JSONL file. ${DATA_NOTE}`,
+    description: (COWORK_ONLY
+        ? 'Read a Cowork record, or its archive copy, at a path search returned, whole or by line range. Nothing else on this computer is readable here. '
+        : 'Read a full conversation transcript from its archive JSONL file. ') + DATA_NOTE,
     inputSchema: {
         path: z.string().min(1),
         startLine: z.number().int().min(1).optional(),
@@ -128,7 +152,14 @@ server.registerTool('read', {
     },
 }, async ({ path: requested, startLine, endLine }) => {
     const refused = {
-        content: [{ type: 'text', text: `starmemory reads only the transcripts it indexes and its archive copies of them, and ${requested} is neither.` }],
+        content: [
+            {
+                type: 'text',
+                text: COWORK_ONLY
+                    ? `This starmemory server reads only Cowork records and their archive copies, and ${requested} is neither.`
+                    : `starmemory reads only the transcripts it indexes and its archive copies of them, and ${requested} is neither.`,
+            },
+        ],
         isError: true,
     };
     if (!isReadable(requested, { resolved: false }))
@@ -138,7 +169,7 @@ server.registerTool('read', {
     let filePath = requested;
     if (!fs.existsSync(filePath)) {
         const project = path.basename(path.dirname(requested));
-        for (const harness of HARNESSES) {
+        for (const harness of READ_HARNESSES) {
             const candidate = resolveArchivePath(ARCHIVE_ROOT, requested, harness, project);
             if (candidate !== requested) {
                 filePath = candidate;
@@ -214,20 +245,34 @@ server.registerTool('remember', {
 });
 server.registerTool('forget', {
     title: 'Forget a Session',
-    description: 'Forget a session when the user asks not to record it, in any words ("don\'t record this", "keep this off the ' +
-        'record", "forget this conversation"). Its Cowork record, archive copy and summary are removed at once and it ' +
-        'leaves search results from that moment; a background sync then deletes its indexed exchanges and their ' +
-        'text-index entries. remember refuses it afterwards. For a Claude Code or Codex session, pass that session\'s ' +
-        'id: its transcript stays where the harness keeps it, but starmemory never indexes it again.',
+    description: COWORK_ONLY
+        ? 'Forget this Cowork session when the user asks not to record it, in any words ("don\'t record this", "keep this ' +
+            'off the record", "forget this conversation"), before its first entry as well as after. It leaves search and ' +
+            'read from that moment and remember refuses it afterwards. Its Cowork record, archive copy and summary are ' +
+            'removed at once, and a background sync deletes its indexed exchanges. ' +
+            'This server serves Cowork records only, so it refuses a Claude Code or Codex session id.'
+        : 'Forget a session when the user asks not to record it, in any words ("don\'t record this", "keep this off the ' +
+            'record", "forget this conversation"). Its Cowork record, archive copy and summary are removed at once and it ' +
+            'leaves search results from that moment; a background sync then deletes its indexed exchanges and their ' +
+            'text-index entries. remember refuses it afterwards. For a Claude Code or Codex session, pass that session\'s ' +
+            'id: its transcript stays where the harness keeps it, but starmemory never indexes it again.',
     inputSchema: {
         session: z
             .string()
             .regex(SESSION_KEY_PATTERN)
-            .describe('The session to forget: this session\'s key as used with remember, or a Claude Code or Codex session id.'),
+            .describe(COWORK_ONLY
+            ? 'The session to forget: this session\'s key as used with remember.'
+            : 'The session to forget: this session\'s key as used with remember, or a Claude Code or Codex session id.'),
     },
 }, async ({ session }) => {
     try {
-        const result = forget(session, { coworkRoot: COWORK_ROOT, forgottenPath: FORGOTTEN_PATH, archiveRoot: ARCHIVE_ROOT, store });
+        const result = forget(session, {
+            coworkRoot: COWORK_ROOT,
+            forgottenPath: FORGOTTEN_PATH,
+            archiveRoot: ARCHIVE_ROOT,
+            store,
+            ...(COWORK_ONLY ? { coworkOnly: { dirs: harnessTranscriptDirs() } } : {}),
+        });
         syncSoon();
         const note = result.pendingRows > 0 ? syncOnHoldNote('deleting the indexed exchanges, which stay hidden until then') : '';
         return { content: [{ type: 'text', text: describeForget(result) + note }] };

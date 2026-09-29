@@ -1,6 +1,15 @@
 /** STARMEMORY_COWORK_PATH, else ~/.config/starmemory/cowork, on the machine
  * whose Claude desktop app runs this server for Cowork. */
 export declare function defaultCoworkRoot(env?: NodeJS.ProcessEnv): string;
+/** What this server gives a caller. `all`, the default, is every harness's
+ * sessions, as Claude Code and Codex use it. `cowork` is the Cowork records
+ * alone: search and read see nothing else, and forget refuses a Claude Code or
+ * Codex session. The Claude app's server runs as `cowork` unless the user opts
+ * in (cli/desktop-launch.mjs). */
+export type Scope = 'all' | 'cowork';
+/** STARMEMORY_SCOPE. Unset is `all`; any value but `all` is `cowork`, so a
+ * mistyped setting gives less away, not more. */
+export declare function serverScope(env?: NodeJS.ProcessEnv): Scope;
 /** Upper bounds on one entry. A record is a summary: an entry longer than this
  * is a transcript being pasted in, which is exactly what it must not become. */
 export declare const LIMITS: {

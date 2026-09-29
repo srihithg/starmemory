@@ -27,6 +27,11 @@ import { COWORK_RECORD_PROMPT_SOURCE, COWORK_SESSION_LINE_TYPE, INJECTED_TAG_STA
 export function defaultCoworkRoot(env = process.env) {
     return env.STARMEMORY_COWORK_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'cowork');
 }
+/** STARMEMORY_SCOPE. Unset is `all`; any value but `all` is `cowork`, so a
+ * mistyped setting gives less away, not more. */
+export function serverScope(env = process.env) {
+    return env.STARMEMORY_SCOPE === undefined || env.STARMEMORY_SCOPE === 'all' ? 'all' : 'cowork';
+}
 /** Upper bounds on one entry. A record is a summary: an entry longer than this
  * is a transcript being pasted in, which is exactly what it must not become. */
 export const LIMITS = { title: 200, asked: 2000, found: 8000, project: 80 };

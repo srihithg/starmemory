@@ -426,6 +426,25 @@ async function parseClaudeConversation(
   return exchanges;
 }
 
+/** Every .jsonl file under `dir`, at any depth. A missing folder yields
+ * nothing. */
+export function* walkJsonlFiles(dir: string): Generator<string> {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkJsonlFiles(full);
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      yield full;
+    }
+  }
+}
+
 /** Derives a project name the same way episodic-memory does: the JSONL file's
  * parent directory name (Claude Code's sanitized-cwd slug). */
 export function projectFromPath(filePath: string): string {

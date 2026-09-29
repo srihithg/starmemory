@@ -203,6 +203,76 @@ describe('forget', () => {
   });
 });
 
+describe('forget on a server that serves Cowork records only', () => {
+  const dirs = () => ({ claude: path.join(dir, 'claude', 'projects'), codex: path.join(dir, 'codex', 'sessions') });
+  const coworkOnly = () => ({ dirs: dirs() });
+  const place = (file: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{}\n');
+  };
+  const refused = (session: string) => {
+    expect(() => forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() })).toThrow(
+      /is a Claude Code or Codex session on this computer, and this server serves Cowork records only/
+    );
+    expect(readForgotten(forgottenPath).has(session)).toBe(false);
+  };
+
+  it('refuses a session whose rows came from Claude Code or Codex, and changes nothing', () => {
+    const claude = conversation('7f3c9a52-0000-4000-8000-000000000001', 'claude');
+    conversation('0199aaaa-bbbb-7ccc-8ddd-eeeeffff0009', 'codex');
+
+    refused('7f3c9a52-0000-4000-8000-000000000001');
+    refused('0199aaaa-bbbb-7ccc-8ddd-eeeeffff0009');
+    expect(fs.existsSync(claude.copy)).toBe(true);
+    expect(fs.existsSync(claude.summary)).toBe(true);
+    expect(exchangesFrom(store, 0)).toHaveLength(4);
+  });
+
+  it('refuses one found only by its archive copy, or by its transcript where Claude Code or Codex keeps it', () => {
+    place(path.join(archiveRoot, 'claude', '-Users-me-lanterns', 'aaaaaaaa-0000-4000-8000-000000000001.jsonl.gz'));
+    place(path.join(archiveRoot, 'codex', 'lanterns', 'rollout-2026-09-28T10-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001.jsonl.gz'));
+    place(path.join(dirs().claude, '-Users-me-lanterns', 'bbbbbbbb-0000-4000-8000-000000000002.jsonl'));
+    place(path.join(dirs().claude, '-Users-me-lanterns', 'cccccccc-0000-4000-8000-000000000003', 'subagents', 'agent-a1b2c3.jsonl'));
+    place(path.join(dirs().codex, '2026', '09', '28', 'rollout-2026-09-28T10-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002.jsonl'));
+
+    for (const session of [
+      'aaaaaaaa-0000-4000-8000-000000000001',
+      '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0001',
+      'bbbbbbbb-0000-4000-8000-000000000002',
+      'cccccccc-0000-4000-8000-000000000003',
+      '0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002',
+    ]) refused(session);
+    expect(fs.existsSync(forgottenPath)).toBe(false);
+  });
+
+  it('takes a key that is only the tail of a Codex session\'s id for a Cowork key', () => {
+    place(path.join(dirs().codex, '2026', '09', '28', 'rollout-2026-09-28T10-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002.jsonl'));
+
+    expect(forget('eeeeffff0002', { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() }).alreadyForgotten).toBe(false);
+    expect(readForgotten(forgottenPath).has('eeeeffff0002')).toBe(true);
+  });
+
+  it('lists a key that has stored nothing yet, so remember refuses it from the first entry', () => {
+    const session = 'cowork-2026-09-29-abcd1234';
+    const result = forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() });
+
+    expect(result).toMatchObject({ records: [], copies: [], pendingRows: 0 });
+    expect(describeForget(result)).toContain('Nothing was stored under this key');
+    expect(() => remember(coworkRoot, entry(session), { isForgotten: (s) => readForgotten(forgottenPath).has(s) })).toThrow(/asked to forget/);
+    expect(findRecords(coworkRoot, session)).toEqual([]);
+  });
+
+  it('forgets a Cowork session that has rows and a record', () => {
+    const { copy } = conversation('s-1');
+    remember(coworkRoot, entry('s-1'));
+
+    const result = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() });
+
+    expect(result).toMatchObject({ pendingRows: 2, pendingHarnesses: ['cowork'], entries: 1 });
+    expect(fs.existsSync(copy)).toBe(false);
+  });
+});
+
 describe('search after forget', () => {
   it('leaves the forgotten session out at once, before any sync has deleted it', async () => {
     conversation('forgotten');

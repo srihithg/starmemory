@@ -13,12 +13,16 @@
 //
 // A Claude Code or Codex session is forgotten the same way. Its transcript
 // belongs to that harness and stays where it is; starmemory stops reading it.
+//
+// A server that serves Cowork records only (cowork.ts, Scope) takes a forget
+// from a caller that may have been steered, so it refuses a Claude Code or
+// Codex session.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archivePathFor, summaryPathFor } from './archive.js';
 import { RefusedError, deleteRecords, sessionKeyProblem } from './cowork.js';
-import { projectFromPath } from './parser.js';
+import { projectFromPath, walkJsonlFiles } from './parser.js';
 import { filterIds, getExchange, syncCursorKey } from './store.js';
 import { groupByFile, removeConversations } from './ttl.js';
 import { HARNESSES } from './types.js';
@@ -83,15 +87,21 @@ function listDir(dir) {
         return [];
     }
 }
+/** A Codex rollout of `session`, `rollout-<time>-<session>` then `suffix`,
+ * matched whole, so a key that is only the tail of another session's id
+ * matches nothing. */
+function rolloutName(session, suffix) {
+    const escape = (text) => text.replace(/\./g, '\\.');
+    return new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-${escape(session)}${escape(suffix)}$`);
+}
 /** Archive copies of `session` found by their names, for the ones no row
  * points at: a copy taken before the conversation had a whole exchange, whose
  * source may be gone. Claude Code and Cowork name a transcript after its
- * session. A Codex rollout is `rollout-<time>-<session>`, matched whole, so a
- * key that is only the tail of another session's id matches nothing. */
-function copiesByName(archiveRoot, session) {
-    const rollout = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-${session.replace(/\./g, '\\.')}\\.jsonl\\.gz$`);
+ * session; a Codex rollout ends in it (rolloutName). */
+function copiesByName(archiveRoot, session, harnesses = HARNESSES) {
+    const rollout = rolloutName(session, '.jsonl.gz');
     const found = [];
-    for (const harness of HARNESSES) {
+    for (const harness of harnesses) {
         const harnessDir = path.join(archiveRoot, harness);
         for (const project of listDir(harnessDir)) {
             const dir = path.join(harnessDir, project);
@@ -114,14 +124,40 @@ function removeCopy(copy) {
         fs.rmSync(file, { force: true });
     return existed;
 }
+/** Whether `session` is one Claude Code or Codex keeps: rows of theirs in the
+ * store, an archive copy under their harness, or their transcript of it,
+ * matched by name as the archive copies are. A Claude Code session's
+ * transcript is <project>/<session>.jsonl, and its subagents' are in a
+ * <project>/<session>/ folder. */
+function heldByAnotherHarness(session, { store, archiveRoot, dirs }) {
+    if (store && storedRows(store, session).some((row) => (row.harness ?? 'claude') !== 'cowork'))
+        return true;
+    if (copiesByName(archiveRoot, session, ['claude', 'codex']).length > 0)
+        return true;
+    for (const project of listDir(dirs.claude)) {
+        if (fs.existsSync(path.join(dirs.claude, project, `${session}.jsonl`)) || fs.existsSync(path.join(dirs.claude, project, session)))
+            return true;
+    }
+    const rollout = rolloutName(session, '.jsonl');
+    for (const file of walkJsonlFiles(dirs.codex))
+        if (rollout.test(path.basename(file)))
+            return true;
+    return false;
+}
 /** Forget `session`: put it on the list, then remove its Cowork record and the
  * archive copies and summaries kept of it. The caller starts a sync, which
- * deletes the rest. Throws RefusedError for a key that could not name a
- * session. */
-export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store }) {
+ * deletes the rest. Throws RefusedError, changing nothing, for a key that
+ * could not name a session, or on a Cowork-only server for a Claude Code or
+ * Codex session. A key with nothing stored under it yet is listed all the
+ * same, so remember refuses it from the first entry. */
+export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly }) {
     const problem = sessionKeyProblem(session);
     if (problem)
         throw new RefusedError(problem);
+    if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, dirs: coworkOnly.dirs })) {
+        throw new RefusedError(`Nothing was changed: ${session} is a Claude Code or Codex session on this computer, and this server serves Cowork records only, ` +
+            'so it does not forget other sessions. The user can forget it from a Claude Code or Codex session on this computer.');
+    }
     // The list first. From that moment remember refuses the session and search
     // hides it, even if what follows fails, and a remember racing in another
     // process removes its own write (cowork.ts).

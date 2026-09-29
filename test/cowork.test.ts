@@ -21,6 +21,7 @@ import {
   findRecords,
   projectSlug,
   remember,
+  serverScope,
   sessionKeyProblem,
 } from '../src/cowork.js';
 import { detectHarness, parseConversation } from '../src/parser.js';
@@ -50,6 +51,14 @@ describe('where records live', () => {
   it('defaults under ~/.config/starmemory unless STARMEMORY_COWORK_PATH says otherwise', () => {
     expect(defaultCoworkRoot({})).toBe(path.join(os.homedir(), '.config', 'starmemory', 'cowork'));
     expect(defaultCoworkRoot({ STARMEMORY_COWORK_PATH: '/elsewhere' })).toBe('/elsewhere');
+  });
+});
+
+describe('the server\'s scope', () => {
+  it('is every harness when unset or all, and Cowork records only for anything else', () => {
+    expect(serverScope({})).toBe('all');
+    expect(serverScope({ STARMEMORY_SCOPE: 'all' })).toBe('all');
+    for (const value of ['cowork', '', 'ALL', 'everything', 'all ']) expect(serverScope({ STARMEMORY_SCOPE: value })).toBe('cowork');
   });
 });
 
