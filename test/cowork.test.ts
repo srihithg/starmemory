@@ -286,7 +286,9 @@ describe('the quarantine', () => {
     expect(moved[0].to.endsWith('.jsonl')).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
     expect(findRecords(root, entry().session)).toEqual([]);
-    expect(fs.statSync(moved[0].to).mtimeMs).toBe(now.getTime());
+    // utimes goes through seconds as a float, so a file system can hand back
+    // a fraction of a millisecond less than was set.
+    expect(Math.abs(fs.statSync(moved[0].to).mtimeMs - now.getTime())).toBeLessThan(1);
     if (process.platform !== 'win32') {
       expect(fs.statSync(quarantine().root).mode & 0o777).toBe(0o700);
       expect(fs.statSync(path.dirname(moved[0].to)).mode & 0o777).toBe(0o700);
