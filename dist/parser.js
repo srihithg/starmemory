@@ -5,6 +5,11 @@ import readline from 'node:readline';
  * blacklist of markers is always one Claude Code release behind, and some
  * injected kinds (slash-command echoes) carry no structural flag at all. */
 const HUMAN_PROMPT_SOURCES = ['typed', 'queued'];
+/** The promptSource of a Cowork record's user line. The model wrote it, as its
+ * account of what the user asked, so it is kept as written like a typed prompt,
+ * and the exchange is marked as a note (coworkNote) rather than taken for the
+ * user's own words. Records written before this carry `typed`. */
+export const COWORK_RECORD_PROMPT_SOURCE = 'cowork_record';
 /** Only consulted for entries that carry no `promptSource` at all, which is how
  * older transcripts look. */
 const INJECTED_MARKERS = [
@@ -13,6 +18,11 @@ const INJECTED_MARKERS = [
     '<local-command',
     '<system-reminder>',
 ];
+/** The `<` of every opening or closing tag an injected block is made of: the
+ * markers above and the tags inside them that payloadOfInjectedTurn reads.
+ * What a model writes into a Cowork record has these escaped (src/cowork.ts),
+ * so a note can never pass for a block the harness injected. */
+export const INJECTED_TAG_START = /<(?=\/?(?:system-reminder|task-notification|command-(?:name|args|message)|local-command-[a-z-]+)(?:[\s\/>]|$))/gi;
 /** Tags inside a task notification that hold something a person would search for.
  * `result` is the big one: it carries the subagent's actual report, which is
  * often the most valuable text in the whole record, and `summary` says which
@@ -22,7 +32,7 @@ const INJECTED_MARKERS = [
 const NOTIFICATION_CONTENT_TAGS = ['summary', 'result'];
 export function isInjectedUserTurn(entry, text) {
     if (entry.promptSource !== undefined) {
-        return !HUMAN_PROMPT_SOURCES.includes(entry.promptSource);
+        return !HUMAN_PROMPT_SOURCES.includes(entry.promptSource) && entry.promptSource !== COWORK_RECORD_PROMPT_SOURCE;
     }
     if (entry.isMeta)
         return true;
@@ -278,6 +288,7 @@ async function parseClaudeConversation(filePath, project, archivePath, harness =
                 lineStart: current.userLine,
                 lineEnd: current.lastAssistantLine,
                 isSidechain: current.isSidechain,
+                coworkNote: current.coworkNote,
             });
         }
     };
@@ -319,6 +330,9 @@ async function parseClaudeConversation(filePath, project, archivePath, harness =
                 isSidechain: parsed.isSidechain,
                 sessionId: parsed.sessionId,
                 gitBranch: parsed.gitBranch,
+                // Every entry of a record is the model's note, whichever promptSource
+                // wrote it; the promptSource also marks one read without its header.
+                coworkNote: harness === 'cowork' || parsed.promptSource === COWORK_RECORD_PROMPT_SOURCE || undefined,
             };
         }
         else if (parsed.message.role === 'assistant' && current) {

@@ -13,10 +13,13 @@ function summaryLine(e, archiveRoot) {
     const summary = summaryFor(e, archiveRoot);
     return summary ? `   Summary: ${summary}\n` : '';
 }
-/** `, codex` or `, cowork` after the date. Claude Code, the harness that came
- * first, is the unmarked default. */
+/** `, codex` after the date, and for a Cowork hit who wrote it: the model,
+ * through remember, so that a reader never takes the note for the user's own
+ * words. Claude Code, the harness that came first, is the unmarked default. */
 function harnessLabel(e) {
     const harness = e.harness ?? 'claude';
+    if (harness === 'cowork' || e.coworkNote)
+        return ', cowork note written by Claude';
     return harness === 'claude' ? '' : `, ${harness}`;
 }
 export function formatResults(results, archiveRoot = defaultArchiveRoot()) {

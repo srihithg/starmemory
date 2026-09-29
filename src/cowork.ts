@@ -12,10 +12,16 @@
 // user line (asked) and one assistant line (title and found) in Claude Code's
 // shape, so the Claude parser, the archive, the TTL and both indexes treat a
 // record like any other transcript.
+//
+// The caller can be steered: a Cowork session runs in the cloud and may have
+// read a page written to mislead it. So an entry is marked as the model's note
+// wherever it is shown, and it is written with the harness's control tags
+// escaped, so it cannot pass for the user's words or for something the
+// harness injected.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { COWORK_SESSION_LINE_TYPE } from './parser.js';
+import { COWORK_RECORD_PROMPT_SOURCE, COWORK_SESSION_LINE_TYPE, INJECTED_TAG_START } from './parser.js';
 
 /** STARMEMORY_COWORK_PATH, else ~/.config/starmemory/cowork, on the machine
  * whose Claude desktop app runs this server for Cowork. */
@@ -123,6 +129,51 @@ export interface RememberResult {
  * do instead. */
 export class RefusedError extends Error {}
 
+export const DEFAULT_REMEMBER_DAILY_LIMIT = 300;
+
+/** STARMEMORY_REMEMBER_DAILY_LIMIT, else 300. `0` refuses every entry; a
+ * value that is not a whole number keeps the default. */
+export function defaultRememberDailyLimit(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.STARMEMORY_REMEMBER_DAILY_LIMIT;
+  const limit = Number(raw);
+  return raw !== undefined && raw.trim() !== '' && Number.isInteger(limit) && limit >= 0 ? limit : DEFAULT_REMEMBER_DAILY_LIMIT;
+}
+
+/** How many entries one server process records per UTC day. The default is
+ * far more than a day of sessions writes, and bounds how much a caller
+ * steered into a loop can pile into the memory. Held in memory, so a restart
+ * of the app starts the count again. */
+export class DailyCap {
+  private day = '';
+  private used = 0;
+
+  constructor(readonly limit: number) {}
+
+  /** Throws RefusedError when today's entries are used up. */
+  check(now: Date): void {
+    if (this.today(now) < this.limit) return;
+    throw new RefusedError(
+      `Nothing was recorded: this server has recorded ${this.limit} entries today (UTC), its daily limit ` +
+        '(STARMEMORY_REMEMBER_DAILY_LIMIT), and takes more after 00:00 UTC. One entry per decision, finding or milestone is plenty.'
+    );
+  }
+
+  /** One more entry recorded today. */
+  count(now: Date): void {
+    this.today(now);
+    this.used++;
+  }
+
+  private today(now: Date): number {
+    const day = now.toISOString().slice(0, 10);
+    if (day !== this.day) {
+      this.day = day;
+      this.used = 0;
+    }
+    return this.used;
+  }
+}
+
 export interface RememberOptions {
   /** Whether the user asked to forget the session (src/forget.ts). Asked twice,
    * before writing and after, because `forget` can run in another process in
@@ -132,6 +183,8 @@ export interface RememberOptions {
    * record started again under a key counts its lines from 1, so the caller
    * removes any sync cursor left there by the key's earlier record. */
   onStart?: (file: string) => void;
+  /** Refuses an entry over the day's limit, and counts each one written. */
+  dailyCap?: DailyCap;
   now?: Date;
 }
 
@@ -157,27 +210,43 @@ function headerLine(session: string, project: string, now: Date): string {
   return JSON.stringify({ type: COWORK_SESSION_LINE_TYPE, version: 1, session, project, createdAt: now.toISOString() });
 }
 
-/** The user line carries promptSource "typed", which is how the Claude parser
- * knows to keep a user turn verbatim (parser.ts, HUMAN_PROMPT_SOURCES). It is
- * the model's account of what the person asked, never an injected block. */
+/** `text` with the `<` of each harness control tag (parser.ts,
+ * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. Any
+ * other `<`, as in `Array<T>` or `a < b`, is left alone. */
+export function escapeControlTags(text: string): string {
+  return text.replace(INJECTED_TAG_START, '&lt;');
+}
+
+/** The user line carries its own promptSource, which the Claude parser keeps
+ * verbatim, as it does a typed prompt, and marks as a note (parser.ts,
+ * COWORK_RECORD_PROMPT_SOURCE). It is the model's account of what the person
+ * asked, not the person's words. */
 function entryLines({ session, title, asked, found }: RememberInput, now: Date): string {
   const timestamp = now.toISOString();
-  const user = { type: 'user', promptSource: 'typed', sessionId: session, timestamp, message: { role: 'user', content: asked.trim() } };
-  const heading = title.replace(/\s+/g, ' ').trim();
-  const assistant = { type: 'assistant', sessionId: session, timestamp, message: { role: 'assistant', content: `${heading}\n\n${found.trim()}` } };
+  const user = {
+    type: 'user',
+    promptSource: COWORK_RECORD_PROMPT_SOURCE,
+    sessionId: session,
+    timestamp,
+    message: { role: 'user', content: escapeControlTags(asked.trim()) },
+  };
+  const heading = escapeControlTags(title.replace(/\s+/g, ' ').trim());
+  const assistant = { type: 'assistant', sessionId: session, timestamp, message: { role: 'assistant', content: `${heading}\n\n${escapeControlTags(found.trim())}` } };
   return `${JSON.stringify(user)}\n${JSON.stringify(assistant)}\n`;
 }
 
 /** Append one entry to `session`'s record, starting the record if needed.
  * Throws RefusedError, writing nothing, for a bad key, an empty or oversize
- * field, or a session the user asked to forget. */
+ * field, an entry over the daily limit, or a session the user asked to
+ * forget. */
 export function remember(
   root: string,
   input: RememberInput,
-  { isForgotten = () => false, onStart, now = new Date() }: RememberOptions = {}
+  { isForgotten = () => false, onStart, dailyCap, now = new Date() }: RememberOptions = {}
 ): RememberResult {
   const problem = sessionKeyProblem(input.session) ?? entryProblem(input);
   if (problem) throw new RefusedError(problem);
+  dailyCap?.check(now);
 
   // A session stays in the project of its first entry, so it stays one file.
   const existing = findRecords(root, input.session)[0];
@@ -206,6 +275,7 @@ export function remember(
     fs.rmSync(file, { force: true });
     throw new RefusedError(forgottenMessage(input.session));
   }
+  dailyCap?.count(now);
   const requested = input.project === undefined ? undefined : projectSlug(input.project);
   return {
     file,

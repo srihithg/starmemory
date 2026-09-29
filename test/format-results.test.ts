@@ -44,19 +44,24 @@ describe('search results', () => {
     expect(formatResults([{ exchange: stale, snippet: 'q' }], root)).toContain(`in ${copy}`);
   });
 
-  it('name the harness after the date for Codex and Cowork, and leave Claude Code unmarked', () => {
+  it('name the harness after the date for Codex, label a Cowork hit as a note Claude wrote, and leave Claude Code unmarked', () => {
     const root = path.join(dir, 'archive');
     const claude = exchange(1, 'c');
     const codex = { ...exchange(2, 'x'), harness: 'codex' as const };
-    const cowork = { ...exchange(3, 'w'), harness: 'cowork' as const };
+    const cowork = { ...exchange(3, 'w'), harness: 'cowork' as const, coworkNote: true };
+    // Stored before coworkNote existed, and a note found without its record's header.
+    const olderCowork = { ...exchange(4, 'o'), harness: 'cowork' as const };
+    const headerless = { ...exchange(5, 'h'), coworkNote: true };
 
-    const text = formatResults([claude, codex, cowork].map((e) => ({ exchange: e, snippet: 'q' })), root);
+    const text = formatResults([claude, codex, cowork, olderCowork, headerless].map((e) => ({ exchange: e, snippet: 'q' })), root);
     const multi = formatMultiConceptResults([{ exchange: cowork, snippet: 'q', conceptSimilarities: [0.5, 0.6], averageSimilarity: 0.55 }], ['a', 'b'], root);
 
     expect(text).toContain('1. [proj, 2026-09-09]\n');
     expect(text).toContain('2. [proj, 2026-09-09, codex]\n');
-    expect(text).toContain('3. [proj, 2026-09-09, cowork]\n');
-    expect(multi).toContain('1. [proj, 2026-09-09, cowork] - 55% avg match');
+    expect(text).toContain('3. [proj, 2026-09-09, cowork note written by Claude]\n');
+    expect(text).toContain('4. [proj, 2026-09-09, cowork note written by Claude]\n');
+    expect(text).toContain('5. [proj, 2026-09-09, cowork note written by Claude]\n');
+    expect(multi).toContain('1. [proj, 2026-09-09, cowork note written by Claude] - 55% avg match');
   });
 
   it('carry the summary in multi-concept output too', () => {

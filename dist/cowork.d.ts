@@ -53,6 +53,25 @@ export interface RememberResult {
  * do instead. */
 export declare class RefusedError extends Error {
 }
+export declare const DEFAULT_REMEMBER_DAILY_LIMIT = 300;
+/** STARMEMORY_REMEMBER_DAILY_LIMIT, else 300. `0` refuses every entry; a
+ * value that is not a whole number keeps the default. */
+export declare function defaultRememberDailyLimit(env?: NodeJS.ProcessEnv): number;
+/** How many entries one server process records per UTC day. The default is
+ * far more than a day of sessions writes, and bounds how much a caller
+ * steered into a loop can pile into the memory. Held in memory, so a restart
+ * of the app starts the count again. */
+export declare class DailyCap {
+    readonly limit: number;
+    private day;
+    private used;
+    constructor(limit: number);
+    /** Throws RefusedError when today's entries are used up. */
+    check(now: Date): void;
+    /** One more entry recorded today. */
+    count(now: Date): void;
+    private today;
+}
 export interface RememberOptions {
     /** Whether the user asked to forget the session (src/forget.ts). Asked twice,
      * before writing and after, because `forget` can run in another process in
@@ -62,12 +81,19 @@ export interface RememberOptions {
      * record started again under a key counts its lines from 1, so the caller
      * removes any sync cursor left there by the key's earlier record. */
     onStart?: (file: string) => void;
+    /** Refuses an entry over the day's limit, and counts each one written. */
+    dailyCap?: DailyCap;
     now?: Date;
 }
+/** `text` with the `<` of each harness control tag (parser.ts,
+ * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. Any
+ * other `<`, as in `Array<T>` or `a < b`, is left alone. */
+export declare function escapeControlTags(text: string): string;
 /** Append one entry to `session`'s record, starting the record if needed.
  * Throws RefusedError, writing nothing, for a bad key, an empty or oversize
- * field, or a session the user asked to forget. */
-export declare function remember(root: string, input: RememberInput, { isForgotten, onStart, now }?: RememberOptions): RememberResult;
+ * field, an entry over the daily limit, or a session the user asked to
+ * forget. */
+export declare function remember(root: string, input: RememberInput, { isForgotten, onStart, dailyCap, now }?: RememberOptions): RememberResult;
 /** Remove every record of `session`. Returns the files removed and how many
  * entries they held. */
 export declare function deleteRecords(root: string, session: string): {

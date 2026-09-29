@@ -1,4 +1,14 @@
 import type { Harness, ParsedExchange } from './types.js';
+/** The promptSource of a Cowork record's user line. The model wrote it, as its
+ * account of what the user asked, so it is kept as written like a typed prompt,
+ * and the exchange is marked as a note (coworkNote) rather than taken for the
+ * user's own words. Records written before this carry `typed`. */
+export declare const COWORK_RECORD_PROMPT_SOURCE = "cowork_record";
+/** The `<` of every opening or closing tag an injected block is made of: the
+ * markers above and the tags inside them that payloadOfInjectedTurn reads.
+ * What a model writes into a Cowork record has these escaped (src/cowork.ts),
+ * so a note can never pass for a block the harness injected. */
+export declare const INJECTED_TAG_START: RegExp;
 export declare function isInjectedUserTurn(entry: {
     promptSource?: string;
     isMeta?: boolean;

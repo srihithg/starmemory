@@ -29,6 +29,11 @@ export interface ConversationExchange {
      * command output, a system reminder. `userMessage` then holds the normalised
      * payload, not the raw block. */
     userIsInjected?: boolean;
+    /** True for an entry of a Cowork record: the model's own note, written with
+     * `remember` (src/cowork.ts), of what was asked and found. Neither side is
+     * the user's words. Absent on rows stored before this field existed; their
+     * harness, `cowork`, says the same. */
+    coworkNote?: boolean;
 }
 /** A parsed exchange before it has an id (store.ts assigns one on insert). */
 export type ParsedExchange = Omit<ConversationExchange, 'id' | 'embeddingVersion'>;

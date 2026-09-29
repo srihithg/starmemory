@@ -59,6 +59,11 @@ describe('isInjectedUserTurn', () => {
     expect(isInjectedUserTurn({ promptSource: 'queued' }, 'why did it stall')).toBe(false);
   });
 
+  it('keeps a Cowork record\'s user line as written, even when it looks like an injected block', () => {
+    expect(isInjectedUserTurn({ promptSource: 'cowork_record' }, '&lt;system-reminder> in a note')).toBe(false);
+    expect(isInjectedUserTurn({ promptSource: 'cowork_record' }, '<task-notification>')).toBe(false);
+  });
+
   it('rejects a system-sourced prompt even when the text looks ordinary', () => {
     expect(isInjectedUserTurn({ promptSource: 'system' }, 'plain looking text')).toBe(true);
   });

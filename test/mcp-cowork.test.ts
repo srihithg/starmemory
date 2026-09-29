@@ -107,7 +107,7 @@ describe('the MCP server in Cowork use', () => {
     const found = await eventually(() => call('search', { query: 'wick-too-long', mode: 'text' }), (r) => r.text.includes(session));
     const seconds = (Date.now() - started) / 1000;
 
-    expect(found.text).toContain(`[lanterns, ${new Date().toISOString().slice(0, 10)}, cowork]`);
+    expect(found.text).toContain(`[lanterns, ${new Date().toISOString().slice(0, 10)}, cowork note written by Claude]`);
     expect(found.text).toContain(archiveCopy());
     expect(seconds).toBeLessThan(60);
     const semantic = await call('search', { query: 'how often do I need to cut the lamp wick' });
