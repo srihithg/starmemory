@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 /** STARMEMORY_COWORK_PATH, else ~/.config/starmemory/cowork, on the machine
  * whose Claude desktop app runs this server for Cowork. */
 export declare function defaultCoworkRoot(env?: NodeJS.ProcessEnv): string;
@@ -139,6 +140,17 @@ export declare const QUARANTINE_SUFFIX = ".jsonl.forgotten";
 /** When a set-aside record may be deleted, read from its name
  * (quarantineRecord), or undefined for a name that does not carry one. */
 export declare function setAsideExpiry(name: string): number | undefined;
+/** Delete `file`, or with `into` move it elsewhere, only if it is still what
+ * `seen`, the stat it was judged by, describes: a remember can add an entry to
+ * a record while a sync decides to remove it, and is told the entry was
+ * recorded. The file is renamed aside first, so a remember from then on
+ * starts a new record at the path, while one that already had it open writes
+ * into the renamed file, which is what is compared, and what `into` is given.
+ * Changed, it is put back, unless a new record has the path by then; it then
+ * stays aside, under a name nothing reads. When `into` throws, it is put back
+ * the same way and the error goes on. A write landing between the compare and
+ * the delete is still lost. Returns true when the file was taken. */
+export declare function removeIfUnchanged(file: string, seen: fs.Stats, into?: (aside: string) => void): boolean;
 export interface SetAside {
     from: string;
     to: string;
@@ -151,9 +163,15 @@ export interface SetAside {
  * `quarantine.days` whichever process's sync purges it, with whatever days
  * that process was given. The random part keeps a later forget of the same key
  * from overwriting an earlier one, and the name from being guessed. Its mtime
- * becomes `now`. Throws, leaving the record where it was, when it cannot be
- * moved. */
-export declare function quarantineRecord(from: string, quarantine: Quarantine, now?: Date): SetAside;
+ * becomes `now`. `source`, when given, is where the record's file is now,
+ * renamed aside (removeIfUnchanged). Throws, leaving the record where it was,
+ * when it cannot be moved. */
+export declare function quarantineRecord(from: string, quarantine: Quarantine, now?: Date, source?: string): SetAside;
+/** Set the record at `file` aside (quarantineRecord), only if it is still
+ * what `seen` describes (removeIfUnchanged). Undefined when it was not taken:
+ * gone, or changed and put back. Throws, the record put back, when it cannot
+ * be moved. */
+export declare function quarantineIfUnchanged(file: string, seen: fs.Stats, quarantine: Quarantine, now?: Date): SetAside | undefined;
 /** Move every record of `session` into the quarantine (quarantineRecord).
  * Returns each record's old and new path and how many entries they held. */
 export declare function quarantineRecords(root: string, session: string, quarantine: Quarantine, now?: Date): {

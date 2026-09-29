@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionsOfName, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineRecord, recordIdentity } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineIfUnchanged, recordIdentity, removeIfUnchanged } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, isForgotten, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -117,25 +117,35 @@ function* walkAll(dirs, skip) {
     for (const dir of dirs)
         yield* walkJsonlFiles(dir, skip);
 }
-/** Remove a Cowork record and its cursor. A record started later under the same
- * key is a new file whose lines count from 1 again; the old cursor would skip
- * them. */
-function dropRecord(store, filePath) {
-    fs.rmSync(filePath, { force: true });
+/** Remove a Cowork record and its cursor, if nothing was written to it since
+ * `seen`, the stat it was judged by (removeIfUnchanged): a remember may add an
+ * entry while the sync works on the record, and is told it was recorded. A
+ * record started later under the same key is a new file whose lines count
+ * from 1 again; the old cursor would skip them. Returns true when it went. */
+function dropRecord(store, filePath, seen) {
+    if (!removeIfUnchanged(filePath, seen))
+        return false;
     store.meta.remove(syncCursorKey(filePath));
+    return true;
 }
 /** A record of a forgotten session still in the records folder: one a forget
  * could not set aside, or one a remember that raced the forget wrote. Set
  * aside as a forget from Cowork does, keeping its cursor as that does
  * (forget.ts), so it can still be brought back; deleted only when the
- * quarantine keeps nothing, at 0 days or when none was named. A move that
- * fails leaves the record hidden where it is, for the next sync to try again. */
-function setAsideForgotten(store, filePath, quarantine, now, log) {
-    if (!quarantine || quarantine.days <= 0)
-        return dropRecord(store, filePath);
+ * quarantine keeps nothing, at 0 days or when none was named. Either way only
+ * if nothing was written to it since `seen` (removeIfUnchanged): the forget
+ * may have been taken back meanwhile, and an entry added that the user was
+ * told is recorded. A move that fails leaves the record hidden where it is,
+ * for the next sync to try again, as does a record that changed. */
+function setAsideForgotten(store, filePath, seen, quarantine, now, log) {
+    if (!quarantine || quarantine.days <= 0) {
+        dropRecord(store, filePath, seen);
+        return;
+    }
     try {
-        const { to } = quarantineRecord(filePath, quarantine, new Date(now));
-        log(`starmemory: set ${filePath} aside as ${to}, since its session is forgotten`);
+        const setAside = quarantineIfUnchanged(filePath, seen, quarantine, new Date(now));
+        if (setAside)
+            log(`starmemory: set ${filePath} aside as ${setAside.to}, since its session is forgotten`);
     }
     catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -151,14 +161,19 @@ function isInside(child, parent) {
 async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff, forgotten, forgottenNow, quarantine, now, log, }) {
     // Already past the TTL before we ever saw it: not copied, not indexed.
     // Only matters when Claude Code's own 30-day cleanup is turned off.
-    if (fs.statSync(filePath).mtimeMs < cutoff) {
+    const seen = fs.statSync(filePath);
+    if (seen.mtimeMs < cutoff) {
         // A Cowork record is starmemory's own file, so it leaves with its rows
         // (expireOldConversations). A harness's transcript is the harness's to
         // clean. Where the file lives says which it can be, so the old rollouts
         // Codex never deletes are not opened on every sync to find out.
-        if (isInside(filePath, coworkRoot) && (await detectHarness(filePath)) === 'cowork')
-            dropRecord(store, filePath);
-        return { indexed: 0, archived: false };
+        if (!isInside(filePath, coworkRoot) || (await detectHarness(filePath)) !== 'cowork')
+            return { indexed: 0, archived: false };
+        // Not removed, as when it was written to since its age was read: it is
+        // synced as any other record, which also renews the archive copy the
+        // TTL goes by.
+        if (dropRecord(store, filePath, seen))
+            return { indexed: 0, archived: false };
     }
     const project = projectFromPath(filePath);
     // A Cowork record can be forgotten, and a new one started under its key,
@@ -198,7 +213,7 @@ async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff
         // Only a file in the records folder is ours, as with the TTL above: one
         // elsewhere that reads as a record is still a file some harness wrote.
         if (harness === 'cowork' && isInside(filePath, coworkRoot))
-            setAsideForgotten(store, filePath, quarantine, now, log);
+            setAsideForgotten(store, filePath, seen, quarantine, now, log);
         for (const file of [copy, summaryPathFor(copy)])
             fs.rmSync(file, { force: true });
         return { indexed: 0, archived: false };

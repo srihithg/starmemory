@@ -2,7 +2,7 @@
 // model writes one through `remember`. The record is a synthetic transcript in
 // Claude Code's line shape behind one marker line, which is what lets the rest
 // of the engine treat it like any other transcript.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +41,7 @@ beforeEach(() => {
   root = path.join(dir, 'cowork');
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
@@ -416,6 +417,46 @@ describe('the quarantine', () => {
     expect(setAsideExpiry(path.basename(unnamed))).toBeUndefined();
     expect(purgeQuarantine(quarantine(), now)).toEqual([]);
     expect(purgeQuarantine({ ...quarantine(), days: 2 }, now)).toEqual([unnamed]);
+  });
+
+  it('keeps a record set aside long enough ago that changed after the purge judged it', () => {
+    const now = Date.now();
+    remember(root, entry({ session: 'old' }));
+    const [old] = quarantineRecords(root, 'old', quarantine(), new Date(now - 8 * 24 * 60 * 60 * 1000)).moved;
+    const realLstat = fs.lstatSync;
+    let judged = false;
+    // Touched the moment the purge has read its age.
+    vi.spyOn(fs, 'lstatSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+      const stat = realLstat(p, o);
+      if (p === old.to && !judged) {
+        judged = true;
+        fs.utimesSync(old.to, new Date(now), new Date(now));
+      }
+      return stat;
+    }) as typeof fs.lstatSync);
+
+    expect(purgeQuarantine(quarantine(), now)).toEqual([]);
+    expect(fs.readdirSync(path.dirname(old.to))).toEqual([path.basename(old.to)]);
+  });
+
+  it('sets a record aside whole across volumes, with an entry added while it was copied', () => {
+    const { file } = remember(root, entry());
+    const realRename = fs.renameSync;
+    const realCopy = fs.copyFileSync;
+    let copies = 0;
+    vi.spyOn(fs, 'renameSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).startsWith(quarantine().root)) throw Object.assign(new Error('cross-device link not permitted'), { code: 'EXDEV' });
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+    // A remember that had the record open adds an entry once the first copy is made.
+    vi.spyOn(fs, 'copyFileSync').mockImplementation(((from: fs.PathLike, to: fs.PathLike, mode?: number) => {
+      realCopy(from, to, mode);
+      if (copies++ === 0) fs.appendFileSync(file, fs.readFileSync(file, 'utf8').split('\n').slice(1, 3).map((l) => `${l}\n`).join(''));
+    }) as typeof fs.copyFileSync);
+
+    const { moved, entries } = quarantineRecords(root, entry().session, quarantine());
+
+    expect({ entries, kept: countEntries(moved[0].to), left: fs.existsSync(file) }).toEqual({ entries: 2, kept: 2, left: false });
   });
 
   it('removes a project folder it empties, and purges nothing where there is no quarantine', () => {

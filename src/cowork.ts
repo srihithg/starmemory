@@ -421,14 +421,67 @@ function privateDir(dir: string): void {
   fs.chmodSync(dir, 0o700);
 }
 
+/** Nothing was written to the file `now` describes since `seen`. */
+function unchangedSince(now: fs.Stats, seen: fs.Stats): boolean {
+  return now.dev === seen.dev && now.ino === seen.ino && now.size === seen.size && now.mtimeMs === seen.mtimeMs;
+}
+
+/** Delete `file`, or with `into` move it elsewhere, only if it is still what
+ * `seen`, the stat it was judged by, describes: a remember can add an entry to
+ * a record while a sync decides to remove it, and is told the entry was
+ * recorded. The file is renamed aside first, so a remember from then on
+ * starts a new record at the path, while one that already had it open writes
+ * into the renamed file, which is what is compared, and what `into` is given.
+ * Changed, it is put back, unless a new record has the path by then; it then
+ * stays aside, under a name nothing reads. When `into` throws, it is put back
+ * the same way and the error goes on. A write landing between the compare and
+ * the delete is still lost. Returns true when the file was taken. */
+export function removeIfUnchanged(file: string, seen: fs.Stats, into?: (aside: string) => void): boolean {
+  const aside = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.removing`;
+  try {
+    fs.renameSync(file, aside);
+  } catch (error) {
+    // Gone already, or held open where the system forbids a rename: the
+    // next sync looks again.
+    if (['ENOENT', 'EBUSY', 'EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+    throw error;
+  }
+  if (!unchangedSince(fs.lstatSync(aside), seen)) {
+    putBack(aside, file);
+    return false;
+  }
+  if (!into) {
+    fs.rmSync(aside, { force: true });
+    return true;
+  }
+  try {
+    into(aside);
+  } catch (error) {
+    putBack(aside, file);
+    throw error;
+  }
+  return true;
+}
+
+/** `aside` back at `file`, unless a new record has the path by then. */
+function putBack(aside: string, file: string): void {
+  if (!fs.existsSync(file)) fs.renameSync(aside, file);
+}
+
 /** A rename, or where the quarantine is on another volume, a copy that never
- * overwrites and then a delete. */
+ * overwrites and then a delete. The copy is made again if the record grew
+ * while it was copied, so what the delete takes is all in the copy. */
 function moveFile(from: string, to: string): void {
   try {
     fs.renameSync(from, to);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-    fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+    for (;;) {
+      const before = fs.lstatSync(from);
+      fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL);
+      if (unchangedSince(fs.lstatSync(from), before)) break;
+      fs.rmSync(to, { force: true });
+    }
     fs.rmSync(from, { force: true });
   }
 }
@@ -446,9 +499,10 @@ export interface SetAside {
  * `quarantine.days` whichever process's sync purges it, with whatever days
  * that process was given. The random part keeps a later forget of the same key
  * from overwriting an earlier one, and the name from being guessed. Its mtime
- * becomes `now`. Throws, leaving the record where it was, when it cannot be
- * moved. */
-export function quarantineRecord(from: string, quarantine: Quarantine, now: Date = new Date()): SetAside {
+ * becomes `now`. `source`, when given, is where the record's file is now,
+ * renamed aside (removeIfUnchanged). Throws, leaving the record where it was,
+ * when it cannot be moved. */
+export function quarantineRecord(from: string, quarantine: Quarantine, now: Date = new Date(), source: string = from): SetAside {
   privateDir(quarantine.root);
   const dir = path.join(quarantine.root, path.basename(path.dirname(from)));
   privateDir(dir);
@@ -458,10 +512,22 @@ export function quarantineRecord(from: string, quarantine: Quarantine, now: Date
   do {
     to = path.join(dir, `${session}.${expiresAt}-${crypto.randomBytes(4).toString('hex')}${QUARANTINE_SUFFIX}`);
   } while (fs.existsSync(to));
-  moveFile(from, to);
+  moveFile(source, to);
   fs.chmodSync(to, 0o600);
   fs.utimesSync(to, now, now);
   return { from, to, expiresAt };
+}
+
+/** Set the record at `file` aside (quarantineRecord), only if it is still
+ * what `seen` describes (removeIfUnchanged). Undefined when it was not taken:
+ * gone, or changed and put back. Throws, the record put back, when it cannot
+ * be moved. */
+export function quarantineIfUnchanged(file: string, seen: fs.Stats, quarantine: Quarantine, now: Date = new Date()): SetAside | undefined {
+  let setAside: SetAside | undefined;
+  removeIfUnchanged(file, seen, (aside) => {
+    setAside = quarantineRecord(file, quarantine, now, aside);
+  });
+  return setAside;
 }
 
 /** Move every record of `session` into the quarantine (quarantineRecord).
@@ -475,9 +541,11 @@ export function quarantineRecords(
   const moved: SetAside[] = [];
   let entries = 0;
   for (const from of findRecords(root, session)) {
-    const count = countEntries(from);
-    moved.push(quarantineRecord(from, quarantine, now));
-    entries += count;
+    const setAside = quarantineRecord(from, quarantine, now);
+    moved.push(setAside);
+    // Counted once moved: a remember that had the record open may have added
+    // one on the way.
+    entries += countEntries(setAside.to);
   }
   return { moved, entries };
 }
@@ -528,7 +596,8 @@ export function purgeQuarantine({ root, days }: Quarantine, now: number = Date.n
       try {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || (setAsideExpiry(name) ?? stat.mtimeMs + days * DAY_MS) >= now) continue;
-        fs.rmSync(file, { force: true });
+        // Written to since it was judged, it is not deleted this time.
+        if (!removeIfUnchanged(file, stat)) continue;
         purged.push(file);
         emptied = true;
       } catch {

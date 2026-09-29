@@ -9,12 +9,17 @@ import { openStore, exchangesFrom, syncCursorKey, type StoreHandle } from '../sr
 import { VectorIndex } from '../src/vector-index.js';
 import { initEmbeddings } from '../src/embeddings.js';
 import { syncAll } from '../src/sync.js';
-import { remember } from '../src/cowork.js';
+import { countEntries, findSetAside, remember } from '../src/cowork.js';
 import { forget } from '../src/forget.js';
 
 // A gate on the Nth parseConversation call for one file: holds one of two
 // concurrent syncs after its cursor read, while the other copies and inserts.
-const { gates } = vi.hoisted(() => ({ gates: new Map<string, { calls: number; holdCall: number; hold: Promise<void> }>() }));
+// And one on the harness check of a file past the TTL: holds a sync between
+// reading a record's age and deleting it.
+const { gates, harnessGates } = vi.hoisted(() => ({
+  gates: new Map<string, { calls: number; holdCall: number; hold: Promise<void> }>(),
+  harnessGates: new Map<string, { hit: boolean; hold: Promise<void> }>(),
+}));
 vi.mock('../src/parser.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/parser.js')>();
   return {
@@ -23,6 +28,14 @@ vi.mock('../src/parser.js', async (importOriginal) => {
       const g = gates.get(filePath);
       if (g && ++g.calls === g.holdCall) await g.hold;
       return actual.parseConversation(filePath, project, archivePath, sessions);
+    },
+    detectHarness: async (filePath: string) => {
+      const g = harnessGates.get(filePath);
+      if (g && !g.hit) {
+        g.hit = true;
+        await g.hold;
+      }
+      return actual.detectHarness(filePath);
     },
   };
 });
@@ -89,6 +102,7 @@ beforeEach(() => {
   forgottenPath = path.join(dir, 'forgotten.txt');
   claudeDir = path.join(dir, 'claude');
   gates.clear();
+  harnessGates.clear();
   Object.assign(embedGate, { armed: false, hit: false, hold: Promise.resolve() });
 });
 
@@ -253,5 +267,55 @@ describe('a forget taken back while a sync that read the old list is still walki
       rows: exchangesFrom(store, 0).filter((r) => r.sessionId === 's-back').length,
       cursor: store.meta.get(syncCursorKey(file)),
     }).toEqual({ record: true, rows: 1, cursor: 3 });
+  }, 120_000);
+});
+
+describe('a Cowork record past the TTL, written to while the sync that found it old decides', () => {
+  it('keeps the entry a remember added after its age was read, and indexes it', async () => {
+    const entry = (found: string) => ({ session: 's-ttl', title: 'Lanterns', asked: 'How often to trim?', found, project: 'lanterns' });
+    const { file } = remember(coworkRoot, entry('first'));
+    await sync([coworkRoot]);
+    const then = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(file, then, then);
+    fs.utimesSync(path.join(archiveRoot, 'cowork', 'lanterns', 's-ttl.jsonl.gz'), then, then);
+    let release!: () => void;
+    const gate = { hit: false, hold: new Promise<void>((r) => { release = r; }) };
+    harnessGates.set(file, gate);
+    const s1 = sync([coworkRoot]);                    // past the TTL of 180 days, held before it deletes
+    while (!gate.hit) await new Promise((r) => setTimeout(r, 2));
+    remember(coworkRoot, entry('second, while the sync decided'));
+    release();
+    await s1;
+
+    expect({
+      entries: countEntries(file),
+      rows: exchangesFrom(store, 0).map((r) => r.assistantMessage),
+    }).toEqual({ entries: 2, rows: ['Lanterns\n\nfirst', 'Lanterns\n\nsecond, while the sync decided'] });
+  }, 120_000);
+});
+
+describe('a forgotten Cowork record still in the records folder, written to while the sync that found it decides', () => {
+  it('is put back rather than set aside with the entry, and set aside whole by the next sync', async () => {
+    const s = 's-aside';
+    const { file } = remember(coworkRoot, { session: s, title: 'Lanterns', asked: 'How often to trim?', found: 'first', project: 'lanterns' });
+    fs.writeFileSync(forgottenPath, `${s}\n`);       // forgotten, as a forget that could not move it leaves it
+    const quarantine = { root: path.join(dir, 'quarantine'), days: 7 };
+    const syncAside = () =>
+      syncAll(store, openIndex(store, path.join(dir, 'index.hnsw')), [coworkRoot], undefined, {
+        archiveRoot, coworkRoot, forgottenPath, quarantine, log: () => {}, summaries: { summarizers: noSummaries },
+      });
+    let release!: () => void;
+    const gate = { calls: 0, holdCall: 1, hold: new Promise<void>((r) => { release = r; }) };
+    gates.set(file, gate);
+    const s1 = syncAside();                           // held in its parse, the record's stat read
+    while (gate.calls === 0) await new Promise((r) => setTimeout(r, 2));
+    const [, user, assistant] = fs.readFileSync(file, 'utf8').split('\n');
+    fs.appendFileSync(file, `${user}\n${assistant}\n`); // what a remember that had it open adds
+    release();
+    await s1;
+
+    expect({ entries: countEntries(file), setAside: findSetAside(quarantine.root, s) }).toEqual({ entries: 2, setAside: [] });
+    await syncAside();
+    expect({ record: fs.existsSync(file), setAside: findSetAside(quarantine.root, s).map(countEntries) }).toEqual({ record: false, setAside: [2] });
   }, 120_000);
 });

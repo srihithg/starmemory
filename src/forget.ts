@@ -271,10 +271,14 @@ export function forget(
     // (forgetSessions).
     files = findRecords(coworkRoot, session);
     for (const from of files) {
-      entries += countEntries(from);
       try {
-        setAside.push(quarantineRecord(from, quarantine, now));
+        const moved = quarantineRecord(from, quarantine, now);
+        setAside.push(moved);
+        // Counted once moved: a remember that had the record open may have
+        // added one on the way.
+        entries += countEntries(moved.to);
       } catch (error) {
+        entries += countEntries(from);
         // Hidden all the same, since the session is listed; the next sync
         // finds it in the records folder and sets it aside (sync.ts).
         const reason = notSetAside?.reason ?? (error instanceof Error ? error.message : String(error));
