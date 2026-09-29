@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Hybrid BM25 + vector recall for Claude Code, Codex and Cowork conversations",
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "plugins": [
     {
       "name": "starmemory",
       "source": "./",
       "description": "Hybrid recall for Claude Code, Codex and Cowork conversations: Tantivy BM25 + usearch HNSW over LMDB, fused by reciprocal rank. Prebuilt for darwin-arm64.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }

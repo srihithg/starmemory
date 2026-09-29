@@ -1,6 +1,6 @@
 {
   "name": "starmemory",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Hybrid recall plugin for Claude Code, Codex and Cowork: Tantivy BM25 + usearch HNSW over LMDB, fused by reciprocal rank. One Rust addon, no C++ toolchain.",
   "private": true,
   "type": "module",
