@@ -97,8 +97,9 @@ function rolloutName(session, suffix) {
 }
 /** Archive copies of `session` found by their names, for the ones no row
  * points at: a copy taken before the conversation had a whole exchange, whose
- * source may be gone. Claude Code and Cowork name a transcript after its
- * session; a Codex rollout ends in it (rolloutName). */
+ * source may be gone. A copy is named after its transcript, which is named
+ * after its session, or for a Codex rollout ends in it (rolloutName). The
+ * whole name counts for a rollout too, since sync goes by it as well. */
 function copiesByName(archiveRoot, session, harnesses = HARNESSES) {
     const rollout = rolloutName(session, '.jsonl.gz');
     const found = [];
@@ -111,9 +112,8 @@ function copiesByName(archiveRoot, session, harnesses = HARNESSES) {
                     if (rollout.test(name))
                         found.push(path.join(dir, name));
             }
-            else if (fs.existsSync(path.join(dir, `${session}.jsonl.gz`))) {
+            if (fs.existsSync(path.join(dir, `${session}.jsonl.gz`)))
                 found.push(path.join(dir, `${session}.jsonl.gz`));
-            }
         }
     }
     return found;
@@ -127,22 +127,28 @@ function removeCopy(copy) {
 }
 /** Whether `session` is one Claude Code or Codex keeps: rows of theirs in the
  * store, an archive copy under their harness, or their transcript of it,
- * matched by name as the archive copies are. A Claude Code session's
- * transcript is <project>/<session>.jsonl, and its subagents' are in a
- * <project>/<session>/ folder. */
-function heldByAnotherHarness(session, { store, archiveRoot, dirs }) {
+ * matched by name as the archive copies are. Any transcript under their
+ * folders counts, at any depth: sync forgets a transcript by its file name
+ * (sync.ts, syncTranscript), so a key naming a Codex rollout or a subagent's
+ * agent-<id>.jsonl would otherwise forget it. A Claude Code session's
+ * subagents are in a <project>/<session>/ folder, which counts too. */
+function heldByAnotherHarness(session, { store, archiveRoot, coworkRoot, dirs }) {
     if (store && storedRows(store, session).some((row) => (row.harness ?? 'claude') !== 'cowork'))
         return true;
     if (copiesByName(archiveRoot, session, ['claude', 'codex']).length > 0)
         return true;
     for (const project of listDir(dirs.claude)) {
-        if (fs.existsSync(path.join(dirs.claude, project, `${session}.jsonl`)) || fs.existsSync(path.join(dirs.claude, project, session)))
+        if (fs.existsSync(path.join(dirs.claude, project, session)))
             return true;
     }
     const rollout = rolloutName(session, '.jsonl');
-    for (const file of walkJsonlFiles(dirs.codex))
-        if (rollout.test(path.basename(file)))
-            return true;
+    for (const dir of [dirs.claude, dirs.codex]) {
+        for (const file of walkJsonlFiles(dir, coworkRoot)) {
+            const name = path.basename(file);
+            if (name === `${session}.jsonl` || rollout.test(name))
+                return true;
+        }
+    }
     return false;
 }
 /** Forget `session`: put it on the list, then remove its Cowork record, or set
@@ -155,7 +161,7 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
     const problem = sessionKeyProblem(session);
     if (problem)
         throw new RefusedError(problem);
-    if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, dirs: coworkOnly.dirs })) {
+    if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, coworkRoot, dirs: coworkOnly.dirs })) {
         throw new RefusedError(`Nothing was changed: ${session} is a Claude Code or Codex session on this computer, and this server serves Cowork records only, ` +
             'so it does not forget other sessions. The user can forget it from a Claude Code or Codex session on this computer.');
     }

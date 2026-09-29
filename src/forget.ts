@@ -127,8 +127,9 @@ function rolloutName(session: string, suffix: string): RegExp {
 
 /** Archive copies of `session` found by their names, for the ones no row
  * points at: a copy taken before the conversation had a whole exchange, whose
- * source may be gone. Claude Code and Cowork name a transcript after its
- * session; a Codex rollout ends in it (rolloutName). */
+ * source may be gone. A copy is named after its transcript, which is named
+ * after its session, or for a Codex rollout ends in it (rolloutName). The
+ * whole name counts for a rollout too, since sync goes by it as well. */
 function copiesByName(archiveRoot: string, session: string, harnesses: readonly Harness[] = HARNESSES): string[] {
   const rollout = rolloutName(session, '.jsonl.gz');
   const found: string[] = [];
@@ -138,9 +139,8 @@ function copiesByName(archiveRoot: string, session: string, harnesses: readonly 
       const dir = path.join(harnessDir, project);
       if (harness === 'codex') {
         for (const name of listDir(dir)) if (rollout.test(name)) found.push(path.join(dir, name));
-      } else if (fs.existsSync(path.join(dir, `${session}.jsonl.gz`))) {
-        found.push(path.join(dir, `${session}.jsonl.gz`));
       }
+      if (fs.existsSync(path.join(dir, `${session}.jsonl.gz`))) found.push(path.join(dir, `${session}.jsonl.gz`));
     }
   }
   return found;
@@ -162,17 +162,27 @@ export interface HarnessDirs {
 
 /** Whether `session` is one Claude Code or Codex keeps: rows of theirs in the
  * store, an archive copy under their harness, or their transcript of it,
- * matched by name as the archive copies are. A Claude Code session's
- * transcript is <project>/<session>.jsonl, and its subagents' are in a
- * <project>/<session>/ folder. */
-function heldByAnotherHarness(session: string, { store, archiveRoot, dirs }: { store?: StoreHandle; archiveRoot: string; dirs: HarnessDirs }): boolean {
+ * matched by name as the archive copies are. Any transcript under their
+ * folders counts, at any depth: sync forgets a transcript by its file name
+ * (sync.ts, syncTranscript), so a key naming a Codex rollout or a subagent's
+ * agent-<id>.jsonl would otherwise forget it. A Claude Code session's
+ * subagents are in a <project>/<session>/ folder, which counts too. */
+function heldByAnotherHarness(
+  session: string,
+  { store, archiveRoot, coworkRoot, dirs }: { store?: StoreHandle; archiveRoot: string; coworkRoot: string; dirs: HarnessDirs }
+): boolean {
   if (store && storedRows(store, session).some((row) => (row.harness ?? 'claude') !== 'cowork')) return true;
   if (copiesByName(archiveRoot, session, ['claude', 'codex']).length > 0) return true;
   for (const project of listDir(dirs.claude)) {
-    if (fs.existsSync(path.join(dirs.claude, project, `${session}.jsonl`)) || fs.existsSync(path.join(dirs.claude, project, session))) return true;
+    if (fs.existsSync(path.join(dirs.claude, project, session))) return true;
   }
   const rollout = rolloutName(session, '.jsonl');
-  for (const file of walkJsonlFiles(dirs.codex)) if (rollout.test(path.basename(file))) return true;
+  for (const dir of [dirs.claude, dirs.codex]) {
+    for (const file of walkJsonlFiles(dir, coworkRoot)) {
+      const name = path.basename(file);
+      if (name === `${session}.jsonl` || rollout.test(name)) return true;
+    }
+  }
   return false;
 }
 
@@ -202,7 +212,7 @@ export function forget(
 ): ForgetResult {
   const problem = sessionKeyProblem(session);
   if (problem) throw new RefusedError(problem);
-  if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, dirs: coworkOnly.dirs })) {
+  if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, coworkRoot, dirs: coworkOnly.dirs })) {
     throw new RefusedError(
       `Nothing was changed: ${session} is a Claude Code or Codex session on this computer, and this server serves Cowork records only, ` +
         'so it does not forget other sessions. The user can forget it from a Claude Code or Codex session on this computer.'

@@ -245,6 +245,19 @@ describe('forget on a server that serves Cowork records only', () => {
     expect(fs.existsSync(forgottenPath)).toBe(false);
   });
 
+  it('refuses a key that is the whole file name of a transcript Claude Code or Codex keeps, at any depth', () => {
+    const rollout = 'rollout-2026-09-28T10-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0003';
+    place(path.join(dirs().codex, '2026', '09', '28', `${rollout}.jsonl`));
+    place(path.join(dirs().claude, '-Users-me-lanterns', 'dddddddd-0000-4000-8000-000000000004', 'subagents', 'agent-d4e5f6.jsonl'));
+    // Found only by its archive copy, its rollout since gone.
+    place(path.join(archiveRoot, 'codex', 'lanterns', 'rollout-2026-09-28T11-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0004.jsonl.gz'));
+
+    for (const session of [rollout, 'agent-d4e5f6', 'rollout-2026-09-28T11-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0004']) refused(session);
+    expect(fs.existsSync(forgottenPath)).toBe(false);
+    // A Cowork key is still taken.
+    expect(forget('cowork-2026-09-29-fresh001', { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly: coworkOnly() }).alreadyForgotten).toBe(false);
+  });
+
   it('takes a key that is only the tail of a Codex session\'s id for a Cowork key', () => {
     place(path.join(dirs().codex, '2026', '09', '28', 'rollout-2026-09-28T10-00-00-0199aaaa-bbbb-7ccc-8ddd-eeeeffff0002.jsonl'));
 
