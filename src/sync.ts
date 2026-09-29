@@ -323,8 +323,9 @@ async function syncTranscript(
   // cursor is read, which a new record's start clears, and checked again
   // just before the insert.
   const record = isInside(filePath, coworkRoot) ? recordIdentity(filePath) : undefined;
-  // This read is only an optimisation, to avoid embedding rows another sync
-  // has already stored. The authoritative check is inside the insert
+  // This read avoids embedding rows another sync has already stored, and is
+  // what a cursor set back meanwhile is told by, just before the insert. The
+  // authoritative check for rows stored twice is inside the insert
   // transaction below, which re-reads the cursor under LMDB's write lock.
   const cursor = (store.meta.get(syncCursorKey(filePath)) as number | undefined) ?? 0;
 
@@ -389,6 +390,13 @@ async function syncTranscript(
   // between this check and the insert, and the insert cannot take the check
   // into its transaction.
   if (record !== undefined && recordIdentity(filePath) !== record) return { indexed: 0, archived, candidate };
+  // The same record, but its cursor set back since it was read: its rows were
+  // deleted meanwhile, as by a forget whose record was then moved back, and
+  // it is to be indexed from the new cursor, by the next sync. Only a cursor
+  // set back counts. One moved on is another sync's insert, which the
+  // transaction below allows for, and this sync may be the only one holding
+  // the entries written after that sync parsed.
+  if (((store.meta.get(syncCursorKey(filePath)) as number | undefined) ?? 0) < cursor) return { indexed: 0, archived, candidate };
   const { ids } = insertExchangesForFile(store, filePath, pending);
   return { indexed: ids.length, archived, candidate };
 }

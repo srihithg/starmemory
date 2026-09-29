@@ -319,3 +319,77 @@ describe('a forgotten Cowork record still in the records folder, written to whil
     expect({ record: fs.existsSync(file), setAside: findSetAside(quarantine.root, s).map(countEntries) }).toEqual({ record: false, setAside: [2] });
   }, 120_000);
 });
+
+describe('a forget undone from the quarantine while a sync that read the old cursor still embeds', () => {
+  const s = 's-restore';
+  const entry = (found: string) => ({ session: s, title: 'Lanterns', asked: 'How often to trim?', found, project: 'lanterns' });
+  const rem = (found: string) => remember(coworkRoot, entry(found), { onStart: (f) => store.meta.remove(syncCursorKey(f)) });
+  const quarantine = () => ({ root: path.join(dir, 'quarantine'), days: 7 });
+  const indexed = (file: string) => ({ rows: exchangesFrom(store, 0).map((r) => r.assistantMessage), cursor: store.meta.get(syncCursorKey(file)) });
+  const all = { rows: ['Lanterns\n\nfirst', 'Lanterns\n\nsecond', 'Lanterns\n\nthird'], cursor: 7 };
+
+  it('indexes every entry again once the record is moved back', async () => {
+    rem('first');
+    const { file } = rem('second');
+    await sync([coworkRoot]);
+    rem('third');
+    const { setAside: [moved] } = forget(s, { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+    await sync([coworkRoot]);
+    fs.writeFileSync(forgottenPath, '');
+    fs.renameSync(moved.to, moved.from);
+    await sync([coworkRoot]);
+
+    expect(indexed(file)).toEqual(all);
+  }, 120_000);
+
+  it('stores nothing from that sync, whose record is the same file but whose cursor was cleared, and the next sync indexes it all', async () => {
+    rem('first');
+    const { file } = rem('second');                  // lines 1-5
+    await sync([coworkRoot]);                         // rows first, second; cursor 5
+    rem('third');                                     // lines 6-7
+    let release!: () => void;
+    embedGate.hold = new Promise<void>((r) => { release = r; });
+    embedGate.armed = true;
+    const s1 = sync([coworkRoot]);                    // cursor 5 read, held embedding third
+    while (!embedGate.hit) await new Promise((r) => setTimeout(r, 2));
+    const { setAside: [moved] } = forget(s, { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+    await sync([coworkRoot]);                         // the rows go, and the cursor
+    fs.writeFileSync(forgottenPath, '');
+    fs.renameSync(moved.to, moved.from);              // the same file, header and all
+    release();
+    await s1;                                         // finds the cursor set back: stores nothing
+    expect(indexed(file)).toEqual({ rows: [], cursor: undefined });
+    await sync([coworkRoot]);
+
+    expect(indexed(file)).toEqual(all);
+  }, 120_000);
+});
+
+describe('two syncs of a growing Cowork record that overlap', () => {
+  it('store what the later one found past where the earlier one stopped', async () => {
+    const entry = (found: string) => ({ session: 's-overlap', title: 'Lanterns', asked: 'How often to trim?', found, project: 'lanterns' });
+    const { file } = remember(coworkRoot, entry('first'));
+    await sync([coworkRoot]);                         // cursor 3
+    remember(coworkRoot, entry('second'));            // lines 4-5
+    let releaseEmbed!: () => void;
+    embedGate.hold = new Promise<void>((r) => { releaseEmbed = r; });
+    embedGate.armed = true;
+    let releaseParse!: () => void;
+    const gate = { calls: 0, holdCall: 2, hold: new Promise<void>((r) => { releaseParse = r; }) };
+    gates.set(file, gate);
+    const s1 = sync([coworkRoot]);                    // the sync second asked for: cursor 3 read, held embedding it
+    while (!embedGate.hit) await new Promise((r) => setTimeout(r, 2));
+    remember(coworkRoot, entry('third'));             // lines 6-7
+    const s2 = sync([coworkRoot]);                    // the one third asked for: cursor 3 read, held in its parse
+    while (gate.calls < 2) await new Promise((r) => setTimeout(r, 2));
+    releaseEmbed();
+    await s1;                                         // stores second, cursor 5
+    releaseParse();
+    await s2;                                         // the cursor moved on, not back: stores third
+
+    expect({
+      rows: exchangesFrom(store, 0).map((r) => r.assistantMessage),
+      cursor: store.meta.get(syncCursorKey(file)),
+    }).toEqual({ rows: ['Lanterns\n\nfirst', 'Lanterns\n\nsecond', 'Lanterns\n\nthird'], cursor: 7 });
+  }, 120_000);
+});
