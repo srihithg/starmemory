@@ -172,8 +172,10 @@ Records are not summarised again: they already are summaries.
 An entry is the model's note, not your words, and search results say so: a hit
 from a Cowork record is marked `cowork note written by Claude`. Text in an entry
 that looks like one of the harness's own control tags, such as
-`<system-reminder>`, is written with its `<` as `&lt;`, so a note can never pass
-for something the harness injected. One server takes at most 300 entries a day
+`<system-reminder>` or `<bash-stdout>`, is written with its `<` as `&lt;`, so a
+note can never pass for something the harness injected. A tag counts as it
+reads: with invisible characters in it, full-width or small-form brackets, or a
+space after the `<`. One server takes at most 300 entries a day
 (UTC), which `STARMEMORY_REMEMBER_DAILY_LIMIT` changes. The count starts again
 when the app restarts.
 

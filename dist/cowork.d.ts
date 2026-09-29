@@ -95,8 +95,12 @@ export interface RememberOptions {
     now?: Date;
 }
 /** `text` with the `<` of each harness control tag (parser.ts,
- * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. Any
- * other `<`, as in `Array<T>` or `a < b`, is left alone. */
+ * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. A tag is
+ * matched as it reads, with invisible characters left out and look-alike
+ * brackets taken for `<` and `>`, so `<\u200Bsystem-reminder>` and
+ * `\uFF1Csystem-reminder\uFF1E` count; only the bracket that opens it changes,
+ * and the rest of the text is kept as written. Any other `<`, as in `Array<T>`
+ * or `a < b`, is left alone. */
 export declare function escapeControlTags(text: string): string;
 /** Append one entry to `session`'s record, starting the record if needed.
  * Throws RefusedError, writing nothing, for a bad key, an empty or oversize

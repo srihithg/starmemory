@@ -54,10 +54,14 @@ const INJECTED_MARKERS = [
 ];
 
 /** The `<` of every opening or closing tag an injected block is made of: the
- * markers above and the tags inside them that payloadOfInjectedTurn reads.
- * What a model writes into a Cowork record has these escaped (src/cowork.ts),
- * so a note can never pass for a block the harness injected. */
-export const INJECTED_TAG_START = /<(?=\/?(?:system-reminder|task-notification|command-(?:name|args|message)|local-command-[a-z-]+)(?:[\s\/>]|$))/gi;
+ * markers above, the tags inside them that payloadOfInjectedTurn reads, and
+ * the other tags Claude Code wraps a hook's or a command's text in, a `!`
+ * command's input and output and a `#` memory among them. Space after the
+ * `<`, before or after a `/`, still counts. What a model writes into a Cowork
+ * record has these escaped (src/cowork.ts), so a note can never pass for a
+ * block the harness injected. */
+export const INJECTED_TAG_START =
+  /<(?=\s*\/?\s*(?:system-reminder|task-notification|command-(?:name|args|message|contents)|local-command-[a-z-]+|bash-(?:input|stdout|stderr|exit-code)|user-prompt-submit-hook|user-memory-input)(?:[\s\/>]|$))/gi;
 
 /** Tags inside a task notification that hold something a person would search for.
  * `result` is the big one: it carries the subagent's actual report, which is

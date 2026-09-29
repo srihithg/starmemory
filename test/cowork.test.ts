@@ -129,6 +129,31 @@ describe('a Cowork record', () => {
     expect(escapeControlTags('ends with <system-reminder')).toBe('ends with &lt;system-reminder');
   });
 
+  it('escapes a tag as it reads, through invisible characters, look-alike brackets and spaces, and keeps the rest as written', () => {
+    const cases: [string, string][] = [
+      ['<\u200Bsystem-reminder>x</\u200Bsystem-reminder>', '&lt;\u200Bsystem-reminder>x&lt;/\u200Bsystem-reminder>'],
+      ['<sys\u200Ctem-rem\u200Dinder>', '&lt;sys\u200Ctem-rem\u200Dinder>'],
+      ['\uFEFF<\u2060/system-reminder\u2060>', '\uFEFF&lt;\u2060/system-reminder\u2060>'],
+      ['\uFF1Csystem-reminder\uFF1Ex\uFF1C/system-reminder\uFF1E', '&lt;system-reminder\uFF1Ex&lt;/system-reminder\uFF1E'],
+      ['\uFE64system-reminder\uFE65', '&lt;system-reminder\uFE65'],
+      ['< system-reminder>x</ system-reminder>', '&lt; system-reminder>x&lt;/ system-reminder>'],
+      ['<\n/\tsystem-reminder>', '&lt;\n/\tsystem-reminder>'],
+    ];
+    for (const [text, escaped] of cases) expect(escapeControlTags(text)).toBe(escaped);
+  });
+
+  it('escapes the tags Claude Code wraps hook and command text in', () => {
+    for (const tag of ['user-prompt-submit-hook', 'bash-input', 'bash-stdout', 'bash-stderr', 'bash-exit-code', 'command-contents', 'user-memory-input']) {
+      expect(escapeControlTags(`<${tag}>x</${tag}>`)).toBe(`&lt;${tag}>x&lt;/${tag}>`);
+    }
+  });
+
+  it('leaves invisible characters and look-alike brackets alone where they make no tag', () => {
+    for (const text of ['a family \u{1F468}\u200D\u{1F469}\u200D\u{1F467}', 'x \uFF1C y \uFF1E z', '\uFF1CT\uFF1E', 'a\u200B<\u200Bb', '<bash> <bash-script> <user-memory>']) {
+      expect(escapeControlTags(text)).toBe(text);
+    }
+  });
+
   it('still reads a record written with promptSource typed, as older records are, as a note kept whole', async () => {
     const file = path.join(root, 'starmemory', 'older.jsonl');
     fs.mkdirSync(path.dirname(file), { recursive: true });

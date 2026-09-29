@@ -224,11 +224,32 @@ function headerLine(session: string, project: string, now: Date): string {
   return JSON.stringify({ type: COWORK_SESSION_LINE_TYPE, version: 1, session, project, createdAt: now.toISOString() });
 }
 
+/** Characters that do not show, which a tag name can hide behind. */
+const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/;
+/** Brackets that read as `<` and `>`: the full-width and small-form ones. */
+const LOOKALIKE: Readonly<Record<string, string>> = { '\uFF1C': '<', '\uFE64': '<', '\uFF1E': '>', '\uFE65': '>' };
+
 /** `text` with the `<` of each harness control tag (parser.ts,
- * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. Any
- * other `<`, as in `Array<T>` or `a < b`, is left alone. */
+ * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. A tag is
+ * matched as it reads, with invisible characters left out and look-alike
+ * brackets taken for `<` and `>`, so `<\u200Bsystem-reminder>` and
+ * `\uFF1Csystem-reminder\uFF1E` count; only the bracket that opens it changes,
+ * and the rest of the text is kept as written. Any other `<`, as in `Array<T>`
+ * or `a < b`, is left alone. */
 export function escapeControlTags(text: string): string {
-  return text.replace(INJECTED_TAG_START, '&lt;');
+  // `plain` is the text as it reads; at[i] is where its i-th character is in `text`.
+  let plain = '';
+  const at: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (INVISIBLE.test(text[i])) continue;
+    plain += LOOKALIKE[text[i]] ?? text[i];
+    at.push(i);
+  }
+  const opens = new Set(Array.from(plain.matchAll(INJECTED_TAG_START), (match) => at[match.index]));
+  if (opens.size === 0) return text;
+  let escaped = '';
+  for (let i = 0; i < text.length; i++) escaped += opens.has(i) ? '&lt;' : text[i];
+  return escaped;
 }
 
 /** The user line carries its own promptSource, which the Claude parser keeps
