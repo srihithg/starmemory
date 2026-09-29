@@ -97,7 +97,7 @@ and remember the answer:
 1. **Check what is known**, in whatever persistent memory this session has, such as a memory file
    or tool, by looking for a note about starmemory. If `get_device_info` is available, its
    `localMcpServers` lists each local server on the linked computer with its state and any error.
-   The server is `starmem` unless the user chose another name.
+   The server is `starmemserver` unless the user chose another name.
    - If a note records a no, do not offer again unless the user brings it up.
    - If the server is listed with an error, say what you found in one line, then give the fix
      itself.
