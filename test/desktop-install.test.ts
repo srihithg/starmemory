@@ -138,9 +138,23 @@ describe('desktop-install', () => {
 
     expect(status).toBe(0);
     expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', 'star-recall']);
-    expect(output).toContain('replaced  the earlier entry "starmem"');
+    expect(output).toContain(`replaced  the earlier entry "${DEFAULT_SERVER_NAME}"`);
     expect(output).toContain('mcp__remote-devices__star-recall__search');
     expect(backups()).toHaveLength(2);
+  });
+
+  it('replaces the entry an earlier version named "starmem", leaving one under the new name', () => {
+    const launcher = path.join(launcherDir(env), 'launch.mjs');
+    writeConfig({ ...existingConfig, mcpServers: { ...existingConfig.mcpServers, starmem: { command: '/bin/sh', args: [path.join(launcherDir(env), 'run-node.sh'), launcher] } } });
+
+    const { status, output } = install();
+
+    expect(status).toBe(0);
+    expect(DEFAULT_SERVER_NAME).toBe('starmemserver');
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', 'starmemserver']);
+    expect(readConfig().mcpServers['byoc-admin']).toEqual(existingConfig.mcpServers['byoc-admin']);
+    expect(output).toContain('replaced  the earlier entry "starmem"');
+    expect(output).toContain('mcp__remote-devices__starmemserver__search');
   });
 
   it('refuses a --name another server already goes by, and takes it over only with --replace', () => {

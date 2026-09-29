@@ -29,7 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * one it reserves for its own tools, and does not publish the list: it refused
  * "cowork-episodic-memory" and accepted "episode-archive". So the default
  * steers clear of "cowork", "claude" and "memory"; --name picks another. */
-export const DEFAULT_SERVER_NAME = 'starmem';
+export const DEFAULT_SERVER_NAME = 'starmemserver';
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export const USAGE = `Usage: starmemory desktop-install [--name <name>] [--replace] [--restart] [--config <file>] [--no-prepare]
