@@ -24,6 +24,24 @@ export interface ForgetResult {
     setAside: SetAside[];
     /** How long a set-aside record is kept before a sync deletes it. */
     setAsideDays: number;
+    /** Records that could not be set aside, and why. Hidden all the same, and
+     * left where they are for the next sync to set aside (sync.ts). */
+    notSetAside?: {
+        records: string[];
+        reason: string;
+    };
+    /** Records of this session an earlier forget set aside: where each is, the
+     * record it was, when a sync may delete it where its name says, and whether
+     * this forget deleted them (ForgetOptions.quarantineRoot). */
+    earlier: {
+        records: {
+            from: string;
+            to: string;
+            expiresAt?: number;
+        }[];
+        entries: number;
+        removed: boolean;
+    };
     /** The list the session was put on. */
     forgottenPath: string;
     /** Archive copies removed at once, with their summaries. */
@@ -53,8 +71,13 @@ export interface ForgetOptions {
         dirs: HarnessDirs;
     };
     /** Where a Cowork record is set aside instead of deleted, and for how many
-     * days. Without it, or at 0 days, the record is deleted at once. */
+     * days. Without it, or at 0 days, the record is deleted at once. What an
+     * earlier forget set aside there stays for its time. */
     quarantine?: Quarantine;
+    /** Given without `quarantine`, by a server that deletes what it forgets:
+     * the quarantine, whose records of this session an earlier forget from
+     * Cowork set aside. They are deleted with the rest. */
+    quarantineRoot?: string;
     now?: Date;
 }
 /** Forget `session`: put it on the list, then remove its Cowork record, or set
@@ -62,8 +85,10 @@ export interface ForgetOptions {
  * starts a sync, which deletes the rest. Throws RefusedError, changing nothing,
  * for a key that could not name a session, or on a Cowork-only server for a
  * Claude Code or Codex session. A key with nothing stored under it yet is
- * listed all the same, so remember refuses it from the first entry. */
-export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, now }: ForgetOptions): ForgetResult;
+ * listed all the same, so remember refuses it from the first entry. A record
+ * that cannot be set aside is reported (notSetAside), not thrown: the session
+ * is listed by then. */
+export declare function forget(session: string, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, quarantineRoot, now }: ForgetOptions): ForgetResult;
 /** What the model is told, to pass on to the user in a sentence. */
 export declare function describeForget(result: ForgetResult): string;
 /** The sync step: delete every stored conversation of a forgotten session, the

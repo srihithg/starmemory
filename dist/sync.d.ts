@@ -74,8 +74,10 @@ export interface SyncOptions {
      * (src/cowork.ts). The sync deletes the ones whose time is up, as their names
      * say, or for a name that does not say, set aside longer ago than that.
      * It deletes, so it runs only when the caller names the quarantine, as the
-     * CLI does with the defaults. The folder is never walked either way; its
-     * default is defaultQuarantineRoot(). */
+     * CLI does with the defaults. A forgotten Cowork record found still in the
+     * records folder is set aside there for those days, and deleted when they
+     * are 0 or no quarantine is named. The folder is never walked either way;
+     * its default is defaultQuarantineRoot(). */
     quarantine?: Quarantine;
     /** How long this sync may wait for the text-index writer when another
      * process holds it and this one has deletions or new rows the index needs.

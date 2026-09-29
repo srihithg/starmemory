@@ -325,6 +325,67 @@ describe('forget with a quarantine', () => {
     expect(store.meta.get(syncCursorKey(file))).toBe(3);
   });
 
+  it('leaves a record it cannot set aside where it is, hidden, and says so rather than throwing', () => {
+    const { file } = remember(coworkRoot, entry('s-1'));
+    store.meta.putSync(syncCursorKey(file), 3);
+    // A quarantine that cannot be made, on any platform: its parent is a file.
+    fs.writeFileSync(path.join(dir, 'not-a-folder'), '');
+    const unusable = { root: path.join(dir, 'not-a-folder', 'quarantine'), days: 7 };
+
+    const result = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: unusable });
+
+    expect(result).toMatchObject({ records: [file], entries: 1, setAside: [], notSetAside: { records: [file] } });
+    expect(result.notSetAside?.reason).toMatch(/\S/);
+    expect(fs.readFileSync(file, 'utf8')).toContain('How to trim a wick?');
+    expect(readForgotten(forgottenPath).has('s-1')).toBe(true);
+    expect(store.meta.get(syncCursorKey(file))).toBe(3);
+    const said = describeForget(result);
+    expect(said).toContain(`Hidden now: its Cowork record (${file}) is hidden from search and read from this moment, but it could not be set aside yet: ${result.notSetAside?.reason}.`);
+    expect(said).toContain('It stays where it is until the next sync, which tries again to set it aside.');
+    expect(said).toContain(`To undo it: delete the line s-1 from ${forgottenPath}.`);
+    expect(said).not.toContain('Set aside now');
+    expect(said).not.toContain('Removed now: its Cowork record');
+    expect(said).not.toContain('Nothing was stored');
+  });
+
+  it('tells a second forget from Cowork the record is still set aside, and leaves it there', () => {
+    remember(coworkRoot, entry('s-1'));
+    const [first] = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() }).setAside;
+
+    const again = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() });
+
+    expect(again).toMatchObject({ alreadyForgotten: true, setAside: [], earlier: { records: [first], entries: 1, removed: false } });
+    expect(fs.existsSync(first.to)).toBe(true);
+    const said = describeForget(again);
+    const until = new Date(first.expiresAt).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    expect(said).toContain(`Still set aside by an earlier forget: its Cowork record (${first.to}), kept until ${until}, when a sync deletes it for good.`);
+    expect(said).toContain(`then move ${first.to} back to ${first.from}.`);
+    expect(said).not.toContain('nothing of it is stored');
+  });
+
+  it('deletes what a forget from Cowork set aside when forgotten again from Claude Code or Codex, and says so', () => {
+    remember(coworkRoot, entry('s-1'));
+    remember(coworkRoot, entry('other'));
+    const [first] = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() }).setAside;
+    const [kept] = forget('other', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: quarantine() }).setAside;
+    store.meta.putSync(syncCursorKey(first.from), 3);
+
+    const again = forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantineRoot: quarantine().root });
+
+    expect(again).toMatchObject({ alreadyForgotten: true, earlier: { records: [first], entries: 1, removed: true } });
+    expect(fs.existsSync(first.to)).toBe(false);
+    expect(fs.existsSync(kept.to)).toBe(true);
+    expect(store.meta.get(syncCursorKey(first.from))).toBeUndefined();
+    const said = describeForget(again);
+    expect(said).toContain(`Removed now: its Cowork record that an earlier forget set aside, 1 entry (${first.to}).`);
+    expect(said).not.toContain('nothing of it is stored');
+    expect(said).not.toContain('Still set aside');
+    // Nothing is left, and the next one says so.
+    expect(describeForget(forget('s-1', { coworkRoot, forgottenPath, archiveRoot, store, quarantineRoot: quarantine().root }))).toContain(
+      'It had been forgotten already; nothing of it is stored.'
+    );
+  });
+
   it('deletes at once, as without one, when its days are 0', () => {
     const { file } = remember(coworkRoot, entry('s-1'));
     store.meta.putSync(syncCursorKey(file), 3);

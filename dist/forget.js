@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archivePathFor, summaryPathFor } from './archive.js';
-import { RefusedError, deleteRecords, quarantineRecords, sessionKeyProblem } from './cowork.js';
+import { RefusedError, countEntries, deleteRecords, findRecords, findSetAside, quarantineRecord, sessionKeyProblem, setAsideExpiry, } from './cowork.js';
 import { projectFromPath, walkJsonlFiles } from './parser.js';
 import { filterIds, getExchange, syncCursorKey } from './store.js';
 import { groupByFile, removeConversations } from './ttl.js';
@@ -156,8 +156,10 @@ function heldByAnotherHarness(session, { store, archiveRoot, coworkRoot, dirs })
  * starts a sync, which deletes the rest. Throws RefusedError, changing nothing,
  * for a key that could not name a session, or on a Cowork-only server for a
  * Claude Code or Codex session. A key with nothing stored under it yet is
- * listed all the same, so remember refuses it from the first entry. */
-export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, now = new Date() }) {
+ * listed all the same, so remember refuses it from the first entry. A record
+ * that cannot be set aside is reported (notSetAside), not thrown: the session
+ * is listed by then. */
+export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store, coworkOnly, quarantine, quarantineRoot, now = new Date() }) {
     const problem = sessionKeyProblem(session);
     if (problem)
         throw new RefusedError(problem);
@@ -172,16 +174,31 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
     if (!alreadyForgotten)
         addForgotten(forgottenPath, session);
     const setAsideDays = quarantine?.days ?? 0;
+    // Looked for before this forget sets anything aside.
+    const earlierRoot = quarantine?.root ?? quarantineRoot;
+    const earlierFiles = earlierRoot === undefined ? [] : findSetAside(earlierRoot, session);
     let files;
-    let entries;
-    let setAside = [];
+    let entries = 0;
+    const setAside = [];
+    let notSetAside;
     if (quarantine && setAsideDays > 0) {
         // The cursor stays. Brought back before the sync has deleted its rows, the
         // record is the same file, and the cursor is what keeps its entries from
         // being stored twice; the sync that deletes the rows removes it with them
         // (forgetSessions).
-        ({ moved: setAside, entries } = quarantineRecords(coworkRoot, session, quarantine, now));
-        files = setAside.map((m) => m.from);
+        files = findRecords(coworkRoot, session);
+        for (const from of files) {
+            entries += countEntries(from);
+            try {
+                setAside.push(quarantineRecord(from, quarantine, now));
+            }
+            catch (error) {
+                // Hidden all the same, since the session is listed; the next sync
+                // finds it in the records folder and sets it aside (sync.ts).
+                const reason = notSetAside?.reason ?? (error instanceof Error ? error.message : String(error));
+                notSetAside = { records: [...(notSetAside?.records ?? []), from], reason };
+            }
+        }
     }
     else {
         ({ files, entries } = deleteRecords(coworkRoot, session));
@@ -189,6 +206,23 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
         // the old cursor would skip them.
         for (const file of files)
             store?.meta.remove(syncCursorKey(file));
+    }
+    // A server that sets records aside leaves an earlier forget's for their
+    // time; one that deletes what it forgets deletes them too.
+    const earlier = {
+        records: earlierFiles.map((to) => ({
+            from: path.join(coworkRoot, path.basename(path.dirname(to)), `${session}.jsonl`),
+            to,
+            expiresAt: setAsideExpiry(path.basename(to)),
+        })),
+        entries: earlierFiles.reduce((sum, file) => sum + countEntries(file), 0),
+        removed: !quarantine && earlierFiles.length > 0,
+    };
+    if (earlier.removed) {
+        for (const { from, to } of earlier.records) {
+            fs.rmSync(to, { force: true });
+            store?.meta.remove(syncCursorKey(from));
+        }
     }
     const rows = store ? storedRows(store, session) : [];
     // Plain files need no index writer, and a copy holds the whole conversation,
@@ -206,6 +240,8 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
         entries,
         setAside,
         setAsideDays,
+        ...(notSetAside ? { notSetAside } : {}),
+        earlier,
         forgottenPath,
         copies: [...copies].filter(removeCopy),
         pendingRows: rows.length,
@@ -227,8 +263,26 @@ export function describeForget(result) {
         lines.push(`To undo it before then: delete the line ${result.session} from ${result.forgottenPath}, then move ` +
             `${result.setAside.map((m) => `${m.to} back to ${m.from}`).join(', and ')}.`);
     }
+    const notSetAside = result.notSetAside;
+    if (notSetAside) {
+        lines.push(`Hidden now: its Cowork record (${notSetAside.records.join(', ')}) is hidden from search and read from this moment, ` +
+            `but it could not be set aside yet: ${notSetAside.reason}. It stays where it is until the next sync, which tries again to set it aside.`);
+        lines.push(`To undo it: delete the line ${result.session} from ${result.forgottenPath}.`);
+    }
+    const { earlier } = result;
+    if (earlier.records.length > 0 && !earlier.removed) {
+        const until = earlier.records.map((m) => m.expiresAt).filter((at) => at !== undefined);
+        lines.push(`Still set aside by an earlier forget: its Cowork record (${earlier.records.map((m) => m.to).join(', ')}), ` +
+            (until.length > 0 ? `kept until ${utc(Math.min(...until))}, when a sync deletes it for good.` : 'until a sync deletes it for good.'));
+        lines.push(`To undo it before then: delete the line ${result.session} from ${result.forgottenPath}, then move ` +
+            `${earlier.records.map((m) => `${m.to} back to ${m.from}`).join(', and ')}.`);
+    }
+    const handled = result.setAside.length + (notSetAside?.records.length ?? 0);
     const removed = [
-        ...(result.records.length > 0 && !setAside ? [`its Cowork record, ${plural(result.entries, 'entry', 'entries')} (${result.records.join(', ')})`] : []),
+        ...(result.records.length > handled ? [`its Cowork record, ${plural(result.entries, 'entry', 'entries')} (${result.records.join(', ')})`] : []),
+        ...(earlier.removed
+            ? [`its Cowork record that an earlier forget set aside, ${plural(earlier.entries, 'entry', 'entries')} (${earlier.records.map((m) => m.to).join(', ')})`]
+            : []),
         ...(result.copies.length > 0 ? [`the archive ${result.copies.length === 1 ? 'copy' : 'copies'} starmemory kept of it, with any summary`] : []),
     ];
     if (removed.length > 0)
@@ -237,7 +291,7 @@ export function describeForget(result) {
         lines.push(`Hidden from search from now on: ${plural(result.pendingRows, 'indexed exchange', 'indexed exchanges')}. ` +
             'A background sync deletes them and their text-index entries, usually within a minute, or when a sync that is already running finishes.');
     }
-    if (removed.length === 0 && result.pendingRows === 0 && !setAside) {
+    if (removed.length === 0 && result.pendingRows === 0 && handled === 0 && earlier.records.length === 0) {
         lines.push(result.alreadyForgotten
             ? 'It had been forgotten already; nothing of it is stored.'
             : 'Nothing was stored under this key. If you meant this session, check that the key is the one from the starmemory start-up line.');

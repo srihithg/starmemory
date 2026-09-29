@@ -149,6 +149,10 @@ export declare function quarantineRecords(root: string, session: string, quarant
     moved: SetAside[];
     entries: number;
 };
+/** What forgets set aside of `session` in the quarantine at `root`, found by
+ * the names quarantineRecord gives them. The part after the key holds no ".",
+ * so a key that only starts like this one matches none of them. */
+export declare function findSetAside(root: string, session: string): string[];
 /** Delete the set-aside records whose time is up: the expiry in the name, or
  * for a name without one, `days` after its mtime. Only files named as
  * quarantineRecord names them, and a project folder only once this emptied

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, type Quarantine } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineRecord, type Quarantine } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations, type SummaryCandidate, type SummaryOptions } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -153,8 +153,10 @@ export interface SyncOptions {
    * (src/cowork.ts). The sync deletes the ones whose time is up, as their names
    * say, or for a name that does not say, set aside longer ago than that.
    * It deletes, so it runs only when the caller names the quarantine, as the
-   * CLI does with the defaults. The folder is never walked either way; its
-   * default is defaultQuarantineRoot(). */
+   * CLI does with the defaults. A forgotten Cowork record found still in the
+   * records folder is set aside there for those days, and deleted when they
+   * are 0 or no quarantine is named. The folder is never walked either way;
+   * its default is defaultQuarantineRoot(). */
   quarantine?: Quarantine;
   /** How long this sync may wait for the text-index writer when another
    * process holds it and this one has deletions or new rows the index needs.
@@ -228,6 +230,23 @@ function dropRecord(store: StoreHandle, filePath: string): void {
   store.meta.remove(syncCursorKey(filePath));
 }
 
+/** A record of a forgotten session still in the records folder: one a forget
+ * could not set aside, or one a remember that raced the forget wrote. Set
+ * aside as a forget from Cowork does, keeping its cursor as that does
+ * (forget.ts), so it can still be brought back; deleted only when the
+ * quarantine keeps nothing, at 0 days or when none was named. A move that
+ * fails leaves the record hidden where it is, for the next sync to try again. */
+function setAsideForgotten(store: StoreHandle, filePath: string, quarantine: Quarantine | undefined, now: number, log: (line: string) => void): void {
+  if (!quarantine || quarantine.days <= 0) return dropRecord(store, filePath);
+  try {
+    const { to } = quarantineRecord(filePath, quarantine, new Date(now));
+    log(`starmemory: set ${filePath} aside as ${to}, since its session is forgotten`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(`starmemory: could not set ${filePath} aside (${reason}); its session is forgotten, so it stays hidden, and the next sync tries again`);
+  }
+}
+
 interface TranscriptOutcome {
   indexed: number;
   archived: boolean;
@@ -251,7 +270,19 @@ async function syncTranscript(
     cutoff,
     forgotten,
     forgottenNow,
-  }: { archiveRoot: string; coworkRoot: string; cutoff: number; forgotten: ReadonlySet<string>; forgottenNow: () => ReadonlySet<string> }
+    quarantine,
+    now,
+    log,
+  }: {
+    archiveRoot: string;
+    coworkRoot: string;
+    cutoff: number;
+    forgotten: ReadonlySet<string>;
+    forgottenNow: () => ReadonlySet<string>;
+    quarantine?: Quarantine;
+    now: number;
+    log: (line: string) => void;
+  }
 ): Promise<TranscriptOutcome> {
   // Already past the TTL before we ever saw it: not copied, not indexed.
   // Only matters when Claude Code's own 30-day cleanup is turned off.
@@ -279,21 +310,21 @@ async function syncTranscript(
   const resolvedProject = parsed[0]?.project ?? project;
   const copy = archivePathFor(archiveRoot, harness, resolvedProject, filePath);
   // A session the user asked to forget is not copied or indexed again. Its
-  // Cowork record is ours, so that goes too: it can come back when a remember
-  // races the forget. A transcript a harness wrote is the harness's to keep,
-  // and its cursor stays: taking the session off the list resumes indexing
-  // from there, and what the forget deleted is not brought back, so nothing
-  // is ever indexed twice. Whose it is: the file name, as forget and read also
-  // go by, and the session its lines record, read from its first lines when
-  // it has no exchange yet, since a Codex rollout is not named after its
-  // session. A match on this sync's list, read when it started, is confirmed
-  // on the list as it is now: the user may have taken the forget back since,
-  // and written a new record.
+  // Cowork record is ours, so that is set aside too: it is still here when a
+  // forget could not move it, or a remember raced the forget. A transcript a
+  // harness wrote is the harness's to keep, and its cursor stays: taking the
+  // session off the list resumes indexing from there, and what the forget
+  // deleted is not brought back, so nothing is ever indexed twice. Whose it
+  // is: the file name, as forget and read also go by, and the session its
+  // lines record, read from its first lines when it has no exchange yet, since
+  // a Codex rollout is not named after its session. A match on this sync's
+  // list, read when it started, is confirmed on the list as it is now: the
+  // user may have taken the forget back since, and written a new record.
   const sessions = [...new Set([path.basename(filePath, '.jsonl'), ...(parsed[0]?.sessionId ? [parsed[0].sessionId] : await sessionIdsOf(filePath))])];
   const leaveOut = (): TranscriptOutcome => {
     // Only a file in the records folder is ours, as with the TTL above: one
     // elsewhere that reads as a record is still a file some harness wrote.
-    if (harness === 'cowork' && isInside(filePath, coworkRoot)) dropRecord(store, filePath);
+    if (harness === 'cowork' && isInside(filePath, coworkRoot)) setAsideForgotten(store, filePath, quarantine, now, log);
     for (const file of [copy, summaryPathFor(copy)]) fs.rmSync(file, { force: true });
     return { indexed: 0, archived: false };
   };
@@ -384,7 +415,16 @@ export async function syncAll(
     filesScanned++;
     let outcome: TranscriptOutcome;
     try {
-      outcome = await syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff, forgotten, forgottenNow: () => readForgotten(forgottenPath) });
+      outcome = await syncTranscript(store, filePath, {
+        archiveRoot,
+        coworkRoot,
+        cutoff,
+        forgotten,
+        forgottenNow: () => readForgotten(forgottenPath),
+        quarantine,
+        now,
+        log,
+      });
     } catch (error) {
       // Nothing is left to index, and one missing file must not stop the rest.
       if (!vanished(error)) throw error;

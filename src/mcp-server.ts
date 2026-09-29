@@ -330,8 +330,9 @@ server.registerTool(
         archiveRoot: ARCHIVE_ROOT,
         store,
         // The quarantine goes with the scope: a forget a local Claude Code or
-        // Codex session asks for deletes at once, as it always has.
-        ...(COWORK_ONLY ? { coworkOnly: { dirs: harnessTranscriptDirs() }, quarantine: QUARANTINE } : {}),
+        // Codex session asks for deletes at once, as it always has, and that
+        // includes what an earlier forget from Cowork set aside.
+        ...(COWORK_ONLY ? { coworkOnly: { dirs: harnessTranscriptDirs() }, quarantine: QUARANTINE } : { quarantineRoot: QUARANTINE.root }),
       });
       syncSoon();
       const note = result.pendingRows > 0 ? syncOnHoldNote('deleting the indexed exchanges, which stay hidden until then') : '';

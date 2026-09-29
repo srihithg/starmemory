@@ -426,6 +426,28 @@ function listDir(dir: string): string[] {
   }
 }
 
+/** What forgets set aside of `session` in the quarantine at `root`, found by
+ * the names quarantineRecord gives them. The part after the key holds no ".",
+ * so a key that only starts like this one matches none of them. */
+export function findSetAside(root: string, session: string): string[] {
+  const prefix = `${session}.`;
+  const isFile = (file: string) => {
+    try {
+      return fs.lstatSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  return listDir(root)
+    .flatMap((project) =>
+      listDir(path.join(root, project))
+        .filter((name) => name.startsWith(prefix) && /^[0-9A-Za-z]+-[0-9a-f]+\.jsonl\.forgotten$/.test(name.slice(prefix.length)))
+        .map((name) => path.join(root, project, name))
+    )
+    .filter(isFile)
+    .sort();
+}
+
 /** Delete the set-aside records whose time is up: the expiry in the name, or
  * for a name without one, `days` after its mtime. Only files named as
  * quarantineRecord names them, and a project folder only once this emptied

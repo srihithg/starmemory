@@ -199,16 +199,20 @@ once. The file is named `<session>.<expires>-<random>.jsonl.forgotten`, where
 `<expires>` is when it may be deleted, in milliseconds since 1970. Every sync
 goes by that name, so the days of the server that took the forget hold even for
 a sync started with other settings, Codex's for one. The archive copy goes at
-once either way, since sync makes it again from the record. A forget from
-Claude Code or Codex, or from Cowork with `STARMEMORY_SCOPE=all`, deletes the
-record at once.
+once either way, since sync makes it again from the record. If the record
+cannot be moved, the reply says why; it stays hidden where it is, and the next
+sync tries again to set it aside. A sync also sets aside any record of a
+forgotten session it finds still in `cowork/`, and deletes it only at `0` days.
+A forget from Claude Code or Codex, or from Cowork with `STARMEMORY_SCOPE=all`,
+deletes the record at once, along with anything an earlier forget from Cowork
+set aside of that session.
 
 To undo a forget within those days, first delete the session's line from
 `forgotten.txt`, then move the set-aside file back to
 `~/.config/starmemory/cowork/<project>/<session>.jsonl`, under that name. The
 forget's reply names both paths. The next sync indexes the record again. In the
 other order, a sync that runs in between takes the record for one written after
-the forget and deletes it.
+the forget and sets it aside again, under a new name.
 
 Forgotten sessions are listed in `~/.config/starmemory/forgotten.txt`. Deleting
 a line lets starmemory index that transcript again from where it stopped,

@@ -111,6 +111,18 @@ describe('the MCP server in Cowork use', () => {
     expect(fs.existsSync(path.join(dir, 'cowork'))).toBe(false);
   });
 
+  it('deletes what a forget from Cowork set aside, when the session is forgotten again from here', async () => {
+    const key = 'e2e-cowork-set-aside';
+    const setAside = path.join(dir, 'quarantine', 'lanterns', `${key}.${Date.now() + 24 * 60 * 60 * 1000}-0a1b2c3d.jsonl.forgotten`);
+    fs.mkdirSync(path.dirname(setAside), { recursive: true });
+    fs.writeFileSync(setAside, `${JSON.stringify({ type: 'user', promptSource: 'cowork_record', sessionId: key, message: { role: 'user', content: 'q' } })}\n`);
+
+    const forgotten = await call('forget', { session: key });
+
+    expect(forgotten.text).toContain(`Removed now: its Cowork record that an earlier forget set aside, 1 entry (${setAside}).`);
+    expect(fs.existsSync(setAside)).toBe(false);
+  });
+
   it('makes a remembered entry searchable within seconds', async () => {
     const started = Date.now();
     const recorded = await call('remember', {

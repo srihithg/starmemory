@@ -12,7 +12,7 @@ import { VectorIndex } from '../src/vector-index.js';
 import { EMBEDDING_DIM, initEmbeddings } from '../src/embeddings.js';
 import { syncAll } from '../src/sync.js';
 import { readArchive, summaryPathFor } from '../src/archive.js';
-import { quarantineRecords, remember } from '../src/cowork.js';
+import { findSetAside, quarantineRecords, remember } from '../src/cowork.js';
 import { forget } from '../src/forget.js';
 import { search } from '../src/search.js';
 import { TextIndex } from '../src/text-index.js';
@@ -185,7 +185,7 @@ describe('syncAll after forget', () => {
     expect(fs.existsSync(summaryPathFor(copy))).toBe(false);
   }, 120_000);
 
-  it('deletes a record of a forgotten session that comes back, without indexing or archiving it', async () => {
+  it('sets aside a record of a forgotten session that comes back, without indexing or archiving it', async () => {
     forget('raced', { coworkRoot, forgottenPath, archiveRoot });
     // What a remember in another process leaves when it lost the race.
     const { file } = remember(coworkRoot, entry('raced', 'Every forty hours of burning.'));
@@ -195,6 +195,39 @@ describe('syncAll after forget', () => {
     expect(result).toMatchObject({ exchangesIndexed: 0, archived: 0 });
     expect(fs.existsSync(file)).toBe(false);
     expect(fs.existsSync(path.join(archiveRoot, 'cowork', 'lanterns', 'raced.jsonl.gz'))).toBe(false);
+    const [setAside] = findSetAside(quarantineRoot, 'raced');
+    expect(fs.readFileSync(setAside, 'utf8')).toContain('Every forty hours of burning.');
+  }, 120_000);
+
+  it('deletes such a record when the quarantine keeps nothing', async () => {
+    forget('raced', { coworkRoot, forgottenPath, archiveRoot });
+    const { file } = remember(coworkRoot, entry('raced', 'Every forty hours of burning.'));
+
+    await sync({ quarantine: { root: quarantineRoot, days: 0 } });
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect(findSetAside(quarantineRoot, 'raced')).toEqual([]);
+  }, 120_000);
+
+  it('sets aside a record a forget could not move, and leaves it hidden while it cannot either', async () => {
+    const { file } = remember(coworkRoot, entry('stuck', 'Every forty hours of burning.'));
+    await sync();
+    // A quarantine that cannot be made, on any platform: its parent is a file.
+    fs.writeFileSync(path.join(dir, 'not-a-folder'), '');
+    const unusable = { root: path.join(dir, 'not-a-folder', 'quarantine'), days: 7 };
+    expect(forget('stuck', { coworkRoot, forgottenPath, archiveRoot, store, quarantine: unusable }).notSetAside?.records).toEqual([file]);
+
+    const logged: string[] = [];
+    const stuck = await sync({ quarantine: unusable, log: (line) => logged.push(line) });
+    expect(stuck).toMatchObject({ exchangesIndexed: 0, forgotten: 1 });
+    expect(fs.readFileSync(file, 'utf8')).toContain('Every forty hours of burning.');
+    expect(logged.join('\n')).toContain(`could not set ${file} aside`);
+
+    await sync();
+    expect(fs.existsSync(file)).toBe(false);
+    const [setAside] = findSetAside(quarantineRoot, 'stuck');
+    expect(fs.readFileSync(setAside, 'utf8')).toContain('Every forty hours of burning.');
+    expect(exchangesFrom(store, 0)).toEqual([]);
   }, 120_000);
 
   it('leaves a forgotten file that reads as a record in place when it is not in the records folder', async () => {
