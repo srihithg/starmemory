@@ -17,14 +17,20 @@ function summaryLine(e: ConversationExchange, archiveRoot: string): string {
   return summary ? `   Summary: ${summary}\n` : '';
 }
 
+/** `, codex` or `, cowork` after the date. Claude Code, the harness that came
+ * first, is the unmarked default. */
+function harnessLabel(e: ConversationExchange): string {
+  const harness = e.harness ?? 'claude';
+  return harness === 'claude' ? '' : `, ${harness}`;
+}
+
 export function formatResults(results: SearchResult[], archiveRoot = defaultArchiveRoot()): string {
   if (results.length === 0) return 'No results found.';
   return results
     .map((r, i) => {
       const date = r.exchange.timestamp.slice(0, 10);
       const pct = r.similarity !== undefined ? ` - ${Math.round(r.similarity * 100)}% match` : '';
-      const from = r.exchange.harness === 'codex' ? ', codex' : '';
-      return `${i + 1}. [${r.exchange.project}, ${date}${from}]${pct}\n${summaryLine(r.exchange, archiveRoot)}   "${r.snippet}"\n   Lines ${r.exchange.lineStart}-${r.exchange.lineEnd} in ${pathOf(r.exchange, archiveRoot)}\n`;
+      return `${i + 1}. [${r.exchange.project}, ${date}${harnessLabel(r.exchange)}]${pct}\n${summaryLine(r.exchange, archiveRoot)}   "${r.snippet}"\n   Lines ${r.exchange.lineStart}-${r.exchange.lineEnd} in ${pathOf(r.exchange, archiveRoot)}\n`;
     })
     .join('\n');
 }
@@ -39,7 +45,7 @@ export function formatMultiConceptResults(
     .map((r, i) => {
       const date = r.exchange.timestamp.slice(0, 10);
       const scores = r.conceptSimilarities.map((s, j) => `${concepts[j]}: ${Math.round(s * 100)}%`).join(', ');
-      return `${i + 1}. [${r.exchange.project}, ${date}] - ${Math.round(r.averageSimilarity * 100)}% avg match\n   Concepts: ${scores}\n${summaryLine(r.exchange, archiveRoot)}   "${r.snippet}"\n   Lines ${r.exchange.lineStart}-${r.exchange.lineEnd} in ${pathOf(r.exchange, archiveRoot)}\n`;
+      return `${i + 1}. [${r.exchange.project}, ${date}${harnessLabel(r.exchange)}] - ${Math.round(r.averageSimilarity * 100)}% avg match\n   Concepts: ${scores}\n${summaryLine(r.exchange, archiveRoot)}   "${r.snippet}"\n   Lines ${r.exchange.lineStart}-${r.exchange.lineEnd} in ${pathOf(r.exchange, archiveRoot)}\n`;
     })
     .join('\n');
 }

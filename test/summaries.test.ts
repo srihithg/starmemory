@@ -52,6 +52,10 @@ describe('selectForSummary', () => {
   it('picks nothing when the limit is zero', () => {
     expect(selectForSummary([candidate('q', 3 * HOUR)], { now, limit: 0 })).toEqual([]);
   });
+  it('never picks a Cowork record, which the model already wrote as a summary', () => {
+    const cowork = candidate('cowork-rec', 3 * HOUR, { harness: 'cowork' });
+    expect(selectForSummary([cowork, candidate('claude-rec', 3 * HOUR)], { now }).map((c) => c.sessionId)).toEqual(['claude-rec']);
+  });
 });
 
 describe('transcriptText', () => {

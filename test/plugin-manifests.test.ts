@@ -27,6 +27,36 @@ describe('Codex plugin manifest', () => {
   it('shares the hooks file with Claude Code, so a sync is one command in both', () => {
     expect(manifest().hooks).toBe('./hooks/hooks.json');
   });
+
+  it('points at the skills folder Claude Code finds on its own at the plugin root', () => {
+    expect(manifest().skills).toBe('./skills/');
+    expect(fs.existsSync(path.join(root, manifest().skills, 'starmemory', 'SKILL.md'))).toBe(true);
+  });
+});
+
+describe('the starmemory skill', () => {
+  const text = () => fs.readFileSync(path.join(root, 'skills', 'starmemory', 'SKILL.md'), 'utf8');
+  const frontmatter = () => {
+    const block = text().match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
+    return Object.fromEntries(block.split('\n').map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));
+  };
+
+  it('is named starmemory, the name the start-up reminder tells the model to load', () => {
+    expect(frontmatter().name).toBe('starmemory');
+    expect(fs.readFileSync(path.join(root, 'hooks', 'reminder.sh'), 'utf8')).toContain('load the starmemory skill');
+  });
+
+  it('has a description that says when to use it, short enough for a skill listing', () => {
+    const description = frontmatter().description;
+    expect(description.length).toBeGreaterThan(100);
+    expect(description.length).toBeLessThanOrEqual(1024);
+    for (const trigger of ['last time', 'we discussed', 'Cowork', 'not to record']) expect(description).toContain(trigger);
+  });
+
+  // test/mcp-cowork.test.ts pins these as the server's tool list.
+  it('names the four tools the server registers', () => {
+    for (const tool of ['search', 'read', 'remember', 'forget']) expect(text()).toContain(`\`${tool}\``);
+  });
 });
 
 describe('.mcp.json (read by Codex)', () => {
@@ -62,6 +92,23 @@ describe('hooks.json', () => {
     for (const group of hooks) {
       expect(group.matcher.split('|')).toEqual(expect.arrayContaining(['startup', 'resume', 'clear', 'compact']));
     }
+  });
+
+  // Behaviour is in test/hooks.test.ts; this is the wiring.
+  it('runs the reminder at session start and on prompts, from the script that ships', () => {
+    const hooks = read('hooks/hooks.json').hooks;
+    const reminders = (event: string) =>
+      hooks[event].flatMap((g: { hooks: { command: string }[] }) => g.hooks.map((h) => h.command)).filter((c: string) => c.includes('/hooks/reminder.sh'));
+
+    expect(reminders('SessionStart')).toEqual([expect.stringMatching(/reminder\.sh" session-start$/)]);
+    expect(reminders('UserPromptSubmit')).toEqual([expect.stringMatching(/reminder\.sh" prompt$/)]);
+    for (const command of reminders('UserPromptSubmit')) expect(command).toContain('${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}');
+    expect(fs.existsSync(path.join(root, 'hooks', 'reminder.sh'))).toBe(true);
+  });
+
+  it('keeps the sync out of a Cowork container, or any cloud container, before anything looks for node', () => {
+    const sync = read('hooks/hooks.json').hooks.SessionStart[0].hooks.find((h: { command: string }) => h.command.includes('starmemory.mjs'));
+    expect(sync.command.startsWith('case "${CLAUDE_CODE_REMOTE:-}:${CLAUDE_CODE_ENTRYPOINT:-}" in true:*|*:remote_cowork*) ;; *) sh ')).toBe(true);
   });
 });
 

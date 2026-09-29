@@ -8,7 +8,9 @@ export declare function defaultArchiveRoot(env?: NodeJS.ProcessEnv): string;
  * the harness and project it came from, so two harnesses never collide. */
 export declare function archivePathFor(root: string, harness: Harness, project: string, sourcePath: string): string;
 /** A readable stream of the transcript's lines, whether it is a plain source
- * file or a gzipped archive copy. */
+ * file or a gzipped archive copy. A read error, a copy removed by `forget`
+ * for one, reaches the reader: pipe() does not pass it on, and an error
+ * nobody listens for would end the process. */
 export declare function openArchive(filePath: string): Readable;
 /** The whole transcript as text; see openArchive. */
 export declare function readArchive(filePath: string): string;

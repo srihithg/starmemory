@@ -1,6 +1,9 @@
-// Parses transcripts into exchanges. Two formats, told apart per file:
+// Parses transcripts into exchanges. Three kinds of file, told apart per file:
 //   - Claude Code: ~/.claude/projects/<slug>/<uuid>.jsonl, one message per line
 //   - Codex: ~/.codex/sessions/**/rollout-*.jsonl, session_meta + response_item lines
+//   - Cowork: ~/.config/starmemory/cowork/<project>/<session>.jsonl, written by
+//     the `remember` tool (src/cowork.ts): a cowork_session line, then Claude
+//     Code lines, so the Claude parser reads it and only the tag differs
 // Ported from episodic-memory's src/parser.ts, trimmed to the fields this engine
 // actually persists -- see design doc §07 "read 完整对话" for why raw-file reading
 // stays untouched regardless of storage engine, and §16 for the two harnesses.
@@ -120,15 +123,24 @@ function extractText(content: string | Array<{ type: string; text?: string }>): 
  * `type: "user" | "assistant" | ...` and a `message`, never a `payload`. */
 const CODEX_LINE_TYPES = new Set(['session_meta', 'turn_context', 'response_item', 'event_msg', 'compacted']);
 
+/** The first line of every Cowork record, and the only thing that tells one
+ * apart from a Claude Code transcript: the lines after it are the same shape. */
+export const COWORK_SESSION_LINE_TYPE = 'cowork_session';
+
 /** Reads the first parseable line and decides which format the file is in.
- * Unknown or empty files are read as Claude, the format that existed first. */
+ * Unknown or empty files are read as Claude, the format that existed first.
+ * Works on an archive copy too, since openArchive undoes the gzip. */
 export async function detectHarness(filePath: string): Promise<Harness> {
-  const rl = readline.createInterface({ input: openArchive(filePath), crlfDelay: Infinity });
+  // Destroyed on the way out: readline's close leaves the file open, and a
+  // sync calls this for every transcript it walks.
+  const input = openArchive(filePath);
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
       if (!line.trim()) continue;
       try {
         const parsed = JSON.parse(line) as { type?: string; payload?: unknown };
+        if (parsed.type === COWORK_SESSION_LINE_TYPE) return 'cowork';
         return parsed.payload && parsed.type && CODEX_LINE_TYPES.has(parsed.type) ? 'codex' : 'claude';
       } catch {
         continue;
@@ -136,8 +148,56 @@ export async function detectHarness(filePath: string): Promise<Harness> {
     }
   } finally {
     rl.close();
+    input.destroy();
   }
   return 'claude';
+}
+
+/** How many lines from the top of a transcript say whose it is. */
+const SESSION_ID_LINES = 50;
+
+/** The session ids a transcript's lines record: the sessionId on Claude Code's
+ * lines (in a subagent's file, the parent session's), a Cowork record's header,
+ * and the session_meta a Codex rollout starts with, whose file name ends in the
+ * id but does not equal it. */
+function sessionIdsInLines(lines: Iterable<string>): Set<string> {
+  const ids = new Set<string>();
+  for (const line of lines) {
+    let parsed: { type?: string; sessionId?: unknown; session?: unknown; payload?: { id?: unknown } };
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const found = [
+      parsed.sessionId,
+      parsed.type === COWORK_SESSION_LINE_TYPE ? parsed.session : undefined,
+      parsed.type === 'session_meta' ? parsed.payload?.id : undefined,
+    ];
+    for (const id of found) if (typeof id === 'string' && id !== '') ids.add(id);
+  }
+  return ids;
+}
+
+/** The sessions a transcript or archive copy belongs to: its file name, which
+ * is the id for Claude Code and Cowork, and the ids its first lines record
+ * (sessionIdsInLines). `text`, when the caller has the file's text already. */
+export async function sessionIdsOf(filePath: string, text?: string): Promise<Set<string>> {
+  const name = path.basename(filePath).replace(/\.gz$/, '').replace(/\.jsonl$/, '');
+  if (text !== undefined) return new Set([name, ...sessionIdsInLines(text.split('\n', SESSION_ID_LINES))]);
+  const head: string[] = [];
+  const input = openArchive(filePath);
+  const rl = readline.createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      head.push(line);
+      if (head.length >= SESSION_ID_LINES) break;
+    }
+  } finally {
+    rl.close();
+    input.destroy();
+  }
+  return new Set([name, ...sessionIdsInLines(head)]);
 }
 
 export async function parseConversation(
@@ -145,10 +205,11 @@ export async function parseConversation(
   project: string,
   archivePath: string
 ): Promise<ParsedExchange[]> {
-  if ((await detectHarness(filePath)) === 'codex') {
+  const harness = await detectHarness(filePath);
+  if (harness === 'codex') {
     return parseCodexConversation(filePath, project, archivePath);
   }
-  return parseClaudeConversation(filePath, project, archivePath);
+  return parseClaudeConversation(filePath, project, archivePath, harness);
 }
 
 interface CodexRolloutLine {
@@ -261,10 +322,15 @@ async function parseCodexConversation(
   return exchanges;
 }
 
+/** Claude Code transcripts, and Cowork records, which are written in the same
+ * line shape (src/cowork.ts); `harness` is the only difference. The record's
+ * cowork_session line has no `message`, so it is skipped like any other
+ * bookkeeping line. */
 async function parseClaudeConversation(
   filePath: string,
   project: string,
-  archivePath: string
+  archivePath: string,
+  harness: Exclude<Harness, 'codex'> = 'claude'
 ): Promise<ParsedExchange[]> {
   const exchanges: ParsedExchange[] = [];
   const rl = readline.createInterface({
@@ -278,7 +344,7 @@ async function parseClaudeConversation(
   const finalize = () => {
     if (current && current.assistantMessages.length > 0) {
       exchanges.push({
-        harness: 'claude',
+        harness,
         project,
         sessionId: current.sessionId,
         gitBranch: current.gitBranch,

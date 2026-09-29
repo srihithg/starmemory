@@ -52,17 +52,23 @@ export interface SummaryCandidate {
   harness: Harness;
   project: string;
   sessionId?: string;
+  /** Every id the transcript goes by (its file name, the ids its lines
+   * record), for `skip`: one with no whole exchange has no sessionId. */
+  sessions?: string[];
   sourceMtimeMs: number;
 }
 
 /** Quiet for long enough, not yet summarised (or the last try failed), newest
- * first, at most `limit`. */
+ * first, at most `limit`. Never a Cowork record: the model wrote it as a
+ * summary already, and there is no session to resume, so summarising it again
+ * would be a model call that says less than the record. */
 export function selectForSummary(
   candidates: SummaryCandidate[],
   { now = Date.now(), quietMs = QUIET_MS, limit = DEFAULT_SUMMARY_LIMIT }: { now?: number; quietMs?: number; limit?: number } = {}
 ): SummaryCandidate[] {
   if (limit <= 0) return [];
   return candidates
+    .filter((c) => c.harness !== 'cowork')
     .filter((c) => c.sourceMtimeMs <= now - quietMs)
     .filter((c) => {
       const state = readSummaryState(summaryPathFor(c.archivePath)).kind;
@@ -127,6 +133,9 @@ export interface SummaryOptions {
   /** Injected by tests; the defaults are the real Agent SDK and codex app-server clients. */
   summarizers?: Summarizers;
   log?: (line: string) => void;
+  /** Asked just before each summary: a conversation to leave alone after all,
+   * such as one the user asked to forget since it was picked. */
+  skip?: (candidate: SummaryCandidate) => boolean;
 }
 
 export interface SummaryRunResult {
@@ -175,10 +184,15 @@ export async function summarizeQuietConversations(
   const picked = selectForSummary(candidates, { now: opts.now, quietMs: opts.quietMs, limit: opts.limit });
   const result: SummaryRunResult = { attempted: picked.length, written: 0, failed: 0 };
   for (const c of picked) {
+    if (opts.skip?.(c)) {
+      result.attempted--;
+      continue;
+    }
     const summaryPath = summaryPathFor(c.archivePath);
     try {
       const exchanges = await parseConversation(c.archivePath, c.project, c.archivePath);
       if (exchanges.length === 0) {
+        if (opts.skip?.(c)) continue;
         writeSummary(summaryPath, '');
         result.written++;
         continue;
@@ -188,9 +202,15 @@ export async function summarizeQuietConversations(
         c.harness === 'codex'
           ? await summarizers.codex({ threadId: c.sessionId, transcript })
           : await summarizers.claude({ sessionId: c.sessionId, cwd: await recordedCwd(c.archivePath), transcript });
+      // Asked again: the model call takes a while, and a session forgotten in
+      // the meantime must not get its summary written after all.
+      if (opts.skip?.(c)) continue;
       writeSummary(summaryPath, text);
       result.written++;
     } catch (error) {
+      // Forgotten while it was being read, its copy removed under it: there is
+      // nothing to retry, and a sentinel would outlive the forget.
+      if (opts.skip?.(c) || !fs.existsSync(c.archivePath)) continue;
       writeErrorSentinel(summaryPath, error);
       result.failed++;
       log(`starmemory: summary failed for ${c.archivePath}: ${error instanceof Error ? error.message : String(error)}`);

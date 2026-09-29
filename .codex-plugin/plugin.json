@@ -20,6 +20,7 @@
     "hybrid-search"
   ],
   "hooks": "./hooks/hooks.json",
+  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "StarMemory",

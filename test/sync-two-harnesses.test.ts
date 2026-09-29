@@ -9,6 +9,7 @@ import { openStore, exchangesFrom, filterIds, type StoreHandle } from '../src/st
 import { VectorIndex } from '../src/vector-index.js';
 import { initEmbeddings } from '../src/embeddings.js';
 import { syncAll, defaultTranscriptDirs } from '../src/sync.js';
+import { defaultCoworkRoot } from '../src/cowork.js';
 
 /** Every VectorIndex opened here, closed in teardown: Windows cannot delete
  * a file that is still mapped, so a leaked handle fails the cleanup. */
@@ -110,15 +111,19 @@ describe('rows from before Codex support', () => {
 });
 
 describe('defaultTranscriptDirs', () => {
-  it('lists the Claude Code projects dir and the Codex sessions dir', () => {
+  it('lists the Claude Code projects dir, the Codex sessions dir and the Cowork records dir', () => {
     const dirs = defaultTranscriptDirs({ HOME: '/Users/me' });
 
-    expect(dirs).toEqual([path.join('/Users/me', '.claude', 'projects'), path.join('/Users/me', '.codex', 'sessions')]);
+    expect(dirs).toEqual([
+      path.join('/Users/me', '.claude', 'projects'),
+      path.join('/Users/me', '.codex', 'sessions'),
+      defaultCoworkRoot({}),
+    ]);
   });
 
-  it('honours CLAUDE_CONFIG_DIR and CODEX_HOME, the same overrides each harness uses', () => {
-    const dirs = defaultTranscriptDirs({ HOME: '/Users/me', CLAUDE_CONFIG_DIR: '/p/claude', CODEX_HOME: '/p/codex' });
+  it('honours CLAUDE_CONFIG_DIR and CODEX_HOME, the same overrides each harness uses, and STARMEMORY_COWORK_PATH', () => {
+    const dirs = defaultTranscriptDirs({ HOME: '/Users/me', CLAUDE_CONFIG_DIR: '/p/claude', CODEX_HOME: '/p/codex', STARMEMORY_COWORK_PATH: '/p/cowork' });
 
-    expect(dirs).toEqual([path.join('/p/claude', 'projects'), path.join('/p/codex', 'sessions')]);
+    expect(dirs).toEqual([path.join('/p/claude', 'projects'), path.join('/p/codex', 'sessions'), '/p/cowork']);
   });
 });

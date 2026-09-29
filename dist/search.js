@@ -42,17 +42,31 @@ function snippetOf(exchange) {
 /** How deep each path digs before fusion. Too shallow and the two lists barely
  * overlap, which turns RRF back into "concatenate two lists" (design doc §06). */
 export const CANDIDATE_DEPTH = 50;
+/** A session the user asked to forget, whose rows the next sync will delete. */
+function isExcluded(exchange, excluded) {
+    return excluded !== undefined && exchange.sessionId !== undefined && excluded.has(exchange.sessionId);
+}
+/** Rows of forgotten sessions that are still stored, waiting for a sync to
+ * delete them. Both paths dig this much deeper, since those rows are dropped
+ * only after ranking and would otherwise push kept rows under the limit. Zero
+ * once the sync has run: one index lookup per forgotten session. */
+function excludedRowCount(store, excluded) {
+    let rows = 0;
+    for (const sessionId of excluded ?? [])
+        rows += filterIds(store, { sessionId })?.length ?? 0;
+    return rows;
+}
 /** Hybrid retrieval. Both paths run with the metadata filter already pushed down,
  * then their ranked id lists are fused (design doc §06/§07).
  *
  * `textIndex` is optional: without the compiled addon we fall back to the old
  * substring scan, which still answers exact-match queries. */
 export async function search(store, index, query, options = {}, textIndex) {
-    const { mode = 'hybrid', limit = 10, after, before, project, sessionId, harness } = options;
+    const { mode = 'hybrid', limit = 10, after, before, project, sessionId, harness, excludeSessions } = options;
     const resolvedMode = mode === 'both' ? 'hybrid' : mode;
     const useVector = resolvedMode === 'vector' || resolvedMode === 'hybrid';
     const useText = resolvedMode === 'text' || resolvedMode === 'hybrid';
-    const depth = resolvedMode === 'hybrid' ? Math.max(CANDIDATE_DEPTH, limit) : limit;
+    const depth = (resolvedMode === 'hybrid' ? Math.max(CANDIDATE_DEPTH, limit) : limit) + excludedRowCount(store, excludeSessions);
     const lists = [];
     const similarityById = new Map();
     let vectorList = -1;
@@ -78,7 +92,7 @@ export async function search(store, index, query, options = {}, textIndex) {
     const results = [];
     for (const entry of fuseByReciprocalRank(lists)) {
         const exchange = getExchange(store, entry.id);
-        if (!exchange)
+        if (!exchange || isExcluded(exchange, excludeSessions))
             continue;
         results.push({
             exchange,
@@ -97,13 +111,14 @@ export async function search(store, index, query, options = {}, textIndex) {
  * search, keep only exchanges present in every concept's hit set, rank by the
  * average of the per-concept scores. */
 export async function searchMultipleConcepts(store, index, concepts, options = {}) {
-    const { limit = 10, project, sessionId, harness } = options;
+    const { limit = 10, project, sessionId, harness, excludeSessions } = options;
     const ids = filterIds(store, { project, sessionId, harness });
+    const depth = limit * 5 + excludedRowCount(store, excludeSessions);
     // Once for the whole query, so every concept is answered from the same graph.
     index.refresh();
     const perConcept = await Promise.all(concepts.map(async (concept) => {
         const embedding = await generateQueryEmbedding(concept);
-        return index.search(embedding, limit * 5, ids);
+        return index.search(embedding, depth, ids);
     }));
     const scoresById = new Map();
     perConcept.forEach((hits, conceptIndex) => {
@@ -118,7 +133,7 @@ export async function searchMultipleConcepts(store, index, concepts, options = {
         if (scores.some((s) => s === undefined))
             continue; // must appear for every concept
         const exchange = getExchange(store, id);
-        if (!exchange)
+        if (!exchange || isExcluded(exchange, excludeSessions))
             continue;
         const averageSimilarity = scores.reduce((a, b) => a + b, 0) / scores.length;
         out.push({ exchange, snippet: snippetOf(exchange), conceptSimilarities: scores, averageSimilarity });
