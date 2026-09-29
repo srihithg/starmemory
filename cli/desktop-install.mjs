@@ -304,8 +304,11 @@ const WINDOWS_APP_PROCESS =
 export function claudeAppRunning(platform = process.platform) {
   if (platform === 'darwin') {
     // -a: pgrep leaves out its own ancestors otherwise, and from a session the
-    // app runs, the app is one of them.
-    const r = spawnSync('pgrep', ['-a', '-x', 'Claude'], { stdio: 'ignore' });
+    // app runs, the app is one of them. -U: another account's app, under fast
+    // user switching, neither reads this account's config nor quits for it.
+    const uid = process.getuid?.();
+    if (uid === undefined) return undefined;
+    const r = spawnSync('pgrep', ['-a', '-U', String(uid), '-x', 'Claude'], { stdio: 'ignore' });
     // 0 is a match and 1 none. Anything else is pgrep failing.
     return r.error || (r.status !== 0 && r.status !== 1) ? undefined : r.status === 0;
   }
@@ -475,23 +478,24 @@ export async function main(argv, deps = {}) {
   const serverRoot = resolvePluginRoot(launch);
   if (!ready) err(`starmemory: its dependencies could not be installed now (see above)${serverRoot === newest ? "; the app's first launch tries again." : '.'}`);
 
+  // Once this has told the app to quit, it opens it again on every way out:
+  // a quit that did not finish in time, a refusal or a failed write among
+  // them. Opening an app still running only brings it forward.
   let quit = false;
-  if (running && opts.restart) {
-    out('starmemory: quitting the Claude app...');
-    if (!quitApp()) {
-      err('starmemory: the Claude app did not quit, so nothing was changed. Quit it yourself and run this again.');
-      return 1;
-    }
-    quit = true;
-  }
-  // Once this has quit the app, it opens it again on every way out, a
-  // refusal or a failed write among them.
   let reopenTried = false;
   const reopen = () => {
     reopenTried = true;
     return openApp();
   };
   try {
+    if (running && opts.restart) {
+      out('starmemory: quitting the Claude app...');
+      quit = true;
+      if (!quitApp()) {
+        err('starmemory: the Claude app did not quit, so nothing was changed. Quit it yourself and run this again.');
+        return 1;
+      }
+    }
     return finish();
   } finally {
     if (quit && !reopenTried) reopen();

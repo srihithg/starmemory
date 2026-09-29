@@ -287,17 +287,20 @@ describe('writing the config', () => {
 describe('telling whether the Claude app is running', () => {
   const installModule = pathToFileURL(path.join(root, 'cli', 'desktop-install.mjs')).href;
 
-  /** claudeAppRunning('darwin'), with a pgrep on PATH that exits as macOS's
-   * does from a session the app runs: the app is an ancestor there, so only
-   * `-a` finds it. */
-  function appRunningWithPgrep(status: number) {
+  /** claudeAppRunning('darwin'), with a pgrep on PATH that runs `body`. */
+  function appRunningWith(body: string) {
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(bin, 'pgrep'), `#!/bin/sh\n[ "$*" = "-a -x Claude" ] && exit ${status}\nexit 1\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'pgrep'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
     const script = `import { claudeAppRunning } from ${JSON.stringify(installModule)}; process.stdout.write(String(claudeAppRunning('darwin')));`;
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }, encoding: 'utf8' });
     return r.stdout;
   }
+
+  /** The same, with a pgrep that exits as macOS's does from a session the app
+   * runs: the app is an ancestor there, so only `-a` finds it, and only this
+   * account's processes are asked about. */
+  const appRunningWithPgrep = (status: number) => appRunningWith(`[ "$*" = "-a -U ${process.getuid?.()} -x Claude" ] && exit ${status}\nexit 1`);
 
   it('counts the app among pgrep\'s ancestors, which pgrep leaves out by default', () => {
     if (process.platform === 'win32') return; // the fake pgrep is a shell script
@@ -308,6 +311,12 @@ describe('telling whether the Claude app is running', () => {
   it('cannot tell when pgrep itself fails', () => {
     if (process.platform === 'win32') return;
     expect(appRunningWithPgrep(3)).toBe('undefined');
+  });
+
+  it('leaves out another account\'s app', () => {
+    if (process.platform === 'win32') return;
+    // Another account has the app open, and this one does not.
+    expect(appRunningWith(`case " $* " in *" -U ${process.getuid?.()} "*) exit 1 ;; esac\nexit 0`)).toBe('false');
   });
 });
 
@@ -344,12 +353,23 @@ describe('desktop-install while the Claude app is running', () => {
     expect(events).toEqual(['quit, entry written: false', 'open, entry written: true']);
   });
 
-  it('with --restart, changes nothing when the app will not quit', async () => {
+  it('with --restart, changes nothing when the app will not quit, and opens it again all the same', async () => {
     writeConfig(existingConfig);
+    const events: string[] = [];
 
-    const code = await main(['--restart', '--no-prepare', '--config', configFile], { ...quiet, env, platform: 'darwin', appRunning: () => true, appConfig: configFile, quitApp: () => false, openApp: () => true });
+    const code = await main(['--restart', '--no-prepare', '--config', configFile], {
+      ...quiet,
+      env,
+      platform: 'darwin',
+      appRunning: () => true,
+      appConfig: configFile,
+      // It may still be quitting, or have quit where the check could not see.
+      quitApp: () => { events.push('quit'); return false; },
+      openApp: () => { events.push('open'); return true; },
+    });
 
     expect(code).toBe(1);
+    expect(events).toEqual(['quit', 'open']);
     expect(readConfig()).toEqual(existingConfig);
   });
 
