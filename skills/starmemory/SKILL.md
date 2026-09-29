@@ -90,9 +90,10 @@ is the id at the end of that file name.
 
 The server runs on the user's Mac, registered with the Claude desktop app, which serves it to the
 Cowork sessions linked to that computer. People use Cowork away from that Mac too, so when the four
-tools are not in this session, the likeliest reason is that the Mac cannot be reached right now,
-not that starmemory was never set up. Offer the setup only when it really looks never done, once,
-and remember the answer:
+tools are not in this session, the Mac may just be out of reach right now. It may also never have
+been set up. This skill being here only shows that the plugin was added to Cowork, the second half
+of the install, and says nothing about the Mac. So offer the setup once, unless something shows it
+was done, and remember the answer:
 
 1. **Check what is known**, in whatever persistent memory this session has, such as a memory file
    or tool, by looking for a note about starmemory. If `get_device_info` is available, its
@@ -105,16 +106,20 @@ and remember the answer:
      itself.
    - If `localMcpServers` comes back without the server and a note records a yes, the setup did not
      finish or the app was not restarted. Say so in one line and give the command in step 4 again.
-   - Otherwise, if the user has set it up before or it looks set up, say once, in one line, that
-     memory isn't reachable right now, because the Mac may be asleep, the Claude app closed, or this
-     session not linked to that computer. Then carry on with what the session is about. This skill
-     being here means the plugin was added to Cowork, the second half of the install, so it looks
-     set up unless something shows otherwise.
-2. **Offer only when it really looks never done**, which is when `localMcpServers` comes back
-   without the server and no note records an answer, or when the user says it was never set up.
-   Offer at the end of your first reply, after answering what they asked, in your own words: "One
-   more thing: starmemory isn't connected to this app yet, so I can't search or record our past
-   sessions. Setting it up is one command in Terminal on your Mac. Want it?"
+   - Otherwise, if the server is listed without an error, a note records a yes, or the user says it
+     is set up, say once, in one line, that memory isn't reachable right now, because the Mac may be
+     asleep, the Claude app closed, or this session not linked to that computer. Then carry on with
+     what the session is about.
+   - Otherwise, offer the setup, as in step 2.
+2. **Offer once**, at the end of your first reply, after answering what they asked, in your own
+   words. When `localMcpServers` comes back without the server, or the user says it was never set
+   up, it is not set up: "One more thing: starmemory isn't connected to this app yet, so I can't
+   search or record our past sessions. Setting it up is one command in Terminal on your Mac. Want
+   it?" When there is no `localMcpServers` to go by, because `get_device_info` is not available or
+   the Mac did not answer it, word the offer for both cases: "One more thing: I can't reach
+   starmemory, so I can't search or record our past sessions. If it isn't set up on your Mac yet,
+   it's one command in Terminal there. Want it? If it is set up, your Mac may just be asleep or the
+   Claude app closed."
 3. **Record the answer** in that memory as soon as they give it, with the date, for example
    `2026-09-28: starmemory setup offered, answer: yes`. Without a persistent memory, just do not ask
    again in this session.

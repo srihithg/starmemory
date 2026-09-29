@@ -111,10 +111,10 @@ nothing until both are done. They are also the whole install for a colleague.
    step 1 made the tools available. Nothing can remind you of this step from
    inside Cowork, because this step is what brings the reminder.
 
-Once both are done, a session that finds the tools missing says in one line
-that memory is out of reach, since the Mac may just be asleep or the app
-closed. It offers step 1 only when it looks never done, once, and remembers
-the answer.
+A session that finds the tools missing, with nothing to show that step 1 was
+done, offers it once, worded for a Mac that may just be asleep, and remembers
+the answer. When step 1 was done, it says in one line that memory is out of
+reach, since the Mac may be asleep or the app closed.
 
 About `desktop-install`:
 
