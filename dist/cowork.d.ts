@@ -94,6 +94,13 @@ export interface RememberOptions {
     dailyCap?: DailyCap;
     now?: Date;
 }
+/** What tells the record at `file` from any other started under the same
+ * key, read from the file as it is now: its header line, whose generation
+ * is new for every record. A record written before generations has only its
+ * start time there, so the file itself, device and inode, counts too. Any
+ * other file in the records folder is taken the same way, by its first
+ * line. Undefined when the file cannot be read. */
+export declare function recordIdentity(file: string): string | undefined;
 /** `text` with the `<` of each harness control tag (parser.ts,
  * INJECTED_TAG_START) written as `&lt;`: still readable, never a tag. A tag is
  * matched as it reads, with invisible characters left out and look-alike

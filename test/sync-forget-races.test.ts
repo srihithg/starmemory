@@ -142,12 +142,68 @@ describe('a Cowork record forgotten while the sync that indexes it runs', () => 
     await sync([coworkRoot]);                         // what the forget started
     fs.writeFileSync(forgottenPath, '');              // taken back, before s1 has stored anything
     release();
-    await s1;                                         // stores the old record's rows, and a cursor at its end
+    await s1;                                         // finds its record gone, and stores nothing
 
-    rem('third, after taking the forget back');
+    const { file } = rem('third, after taking the forget back');
     await sync([coworkRoot]);
 
-    expect(exchangesFrom(store, 0).map((r) => r.assistantMessage)).toContain('Lanterns\n\nthird, after taking the forget back');
+    expect({
+      rows: exchangesFrom(store, 0).map((r) => r.assistantMessage),
+      cursor: store.meta.get(syncCursorKey(file)),
+    }).toEqual({ rows: ['Lanterns\n\nthird, after taking the forget back'], cursor: 3 });
+  }, 120_000);
+
+  it('stores nothing of the old record when a new one was started under its key before that sync stores the rows', async () => {
+    const entry = (found: string) => ({ session: 's-new', title: 'Lanterns', asked: 'How often to trim?', found, project: 'lanterns' });
+    const rem = (found: string) => remember(coworkRoot, entry(found), { onStart: (f) => store.meta.remove(syncCursorKey(f)) });
+    rem('first');
+    rem('second');                                    // lines 1-5
+    let release!: () => void;
+    embedGate.hold = new Promise<void>((r) => { release = r; });
+    embedGate.armed = true;
+    const s1 = sync([coworkRoot]);                    // held in its embedding of the old record
+    while (!embedGate.hit) await new Promise((r) => setTimeout(r, 2));
+    forget('s-new', { coworkRoot, forgottenPath, archiveRoot, store });
+    await sync([coworkRoot]);
+    fs.writeFileSync(forgottenPath, '');
+    const { file } = rem('third, in the new record'); // lines 1-3 of a new record, its cursor dropped
+    release();
+    await s1;
+    rem('fourth, in the new record');                 // lines 4-5
+    await sync([coworkRoot]);
+
+    expect({
+      rows: exchangesFrom(store, 0).map((r) => r.assistantMessage),
+      cursor: store.meta.get(syncCursorKey(file)),
+    }).toEqual({ rows: ['Lanterns\n\nthird, in the new record', 'Lanterns\n\nfourth, in the new record'], cursor: 5 });
+  }, 120_000);
+
+  it('tells a record written before generations from a new one with the very same header line', async () => {
+    const s = 's-old';
+    const projectDir = path.join(coworkRoot, 'lanterns');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const file = path.join(projectDir, `${s}.jsonl`);
+    const header = { type: 'cowork_session', version: 1, session: s, project: 'lanterns', createdAt: '2026-09-28T10:00:00.000Z' };
+    const record = (...found: string[]) => [header, ...found.flatMap((f) => [
+      { type: 'user', promptSource: 'typed', sessionId: s, timestamp: '2026-09-28T10:00:00.000Z', message: { role: 'user', content: 'How often to trim?' } },
+      { type: 'assistant', sessionId: s, timestamp: '2026-09-28T10:00:00.000Z', message: { role: 'assistant', content: `Lanterns\n\n${f}` } },
+    ])].map((l) => `${JSON.stringify(l)}\n`).join('');
+    fs.writeFileSync(file, record('first', 'second'));
+    let release!: () => void;
+    embedGate.hold = new Promise<void>((r) => { release = r; });
+    embedGate.armed = true;
+    const s1 = sync([coworkRoot]);
+    while (!embedGate.hit) await new Promise((r) => setTimeout(r, 2));
+    // Set aside, so the old file keeps its inode while the new one is written.
+    forget(s, { coworkRoot, forgottenPath, archiveRoot, store, quarantine: { root: path.join(dir, 'quarantine'), days: 7 } });
+    await sync([coworkRoot]);
+    fs.writeFileSync(forgottenPath, '');
+    fs.writeFileSync(file, record('third, in the new record'));
+    release();
+    await s1;
+    await sync([coworkRoot]);
+
+    expect(exchangesFrom(store, 0).map((r) => r.assistantMessage)).toEqual(['Lanterns\n\nthird, in the new record']);
   }, 120_000);
 
   it('can be recorded again under its key once the forget is taken back', async () => {

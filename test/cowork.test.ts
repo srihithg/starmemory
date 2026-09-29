@@ -26,6 +26,7 @@ import {
   projectSlug,
   purgeQuarantine,
   quarantineRecords,
+  recordIdentity,
   remember,
   serverScope,
   sessionKeyProblem,
@@ -75,7 +76,10 @@ describe('a Cowork record', () => {
 
     expect(file).toBe(path.join(root, 'starmemory', 'cowork-2026-09-28-76aa87a1.jsonl'));
     const [header, user, assistant] = lines(file);
-    expect(header).toEqual({ type: 'cowork_session', version: 1, session: 'cowork-2026-09-28-76aa87a1', project: 'starmemory', createdAt: '2026-09-28T10:00:00.000Z' });
+    expect(header).toEqual({
+      type: 'cowork_session', version: 1, session: 'cowork-2026-09-28-76aa87a1', project: 'starmemory', createdAt: '2026-09-28T10:00:00.000Z',
+      generation: expect.stringMatching(/^[0-9a-f]{16}$/),
+    });
     expect(user).toMatchObject({ type: 'user', promptSource: 'cowork_record', sessionId: 'cowork-2026-09-28-76aa87a1', message: { role: 'user', content: 'Can starmemory record Cowork sessions?' } });
     expect(assistant.message.content).toBe('Cowork support for starmemory\n\nYes, through a remember tool; the desktop app refused the name "cowork-episodic-memory".');
   });
@@ -282,6 +286,32 @@ describe('remember', () => {
 
     expect(result).toMatchObject({ file, created: true, entries: 1 });
     expect(lines(file).map((l) => l.type)).toEqual(['cowork_session', 'user', 'assistant']);
+  });
+});
+
+describe('which record a file holds', () => {
+  it('stays the same as entries are added, and differs for a record started again under the key at the same instant', () => {
+    const now = new Date('2026-09-28T10:00:00Z');
+    const { file } = remember(root, entry(), { now });
+    const first = recordIdentity(file);
+    remember(root, entry({ found: 'second' }), { now });
+    expect(recordIdentity(file)).toBe(first);
+
+    fs.rmSync(file);
+    remember(root, entry(), { now });
+
+    expect(recordIdentity(file)).not.toBe(first);
+  });
+
+  it('goes by the file as well for a record written before generations, and is undefined for no file', () => {
+    const file = path.join(root, 'starmemory', 'older.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const header = `${JSON.stringify({ type: 'cowork_session', version: 1, session: 'older', project: 'starmemory', createdAt: '2026-09-28T10:00:00.000Z' })}\n`;
+    fs.writeFileSync(file, header);
+    const { ino } = fs.statSync(file);
+
+    expect(recordIdentity(file)).toBe(`${fs.statSync(file).dev}:${ino}:${header.trim()}`);
+    expect(recordIdentity(path.join(root, 'starmemory', 'none.jsonl'))).toBeUndefined();
   });
 });
 

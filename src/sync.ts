@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
-import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineRecord, type Quarantine } from './cowork.js';
+import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineRecord, recordIdentity, type Quarantine } from './cowork.js';
 import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations, type SummaryCandidate, type SummaryOptions } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
@@ -295,6 +295,13 @@ async function syncTranscript(
     return { indexed: 0, archived: false };
   }
   const project = projectFromPath(filePath);
+  // A Cowork record can be forgotten, and a new one started under its key,
+  // while this sync parses and embeds it. The new one counts its lines from
+  // 1, so rows of the old one stored against its cursor would come back and
+  // push the cursor past the new entries. The record is named before the
+  // cursor is read, which a new record's start clears, and checked again
+  // just before the insert.
+  const record = isInside(filePath, coworkRoot) ? recordIdentity(filePath) : undefined;
   // This read is only an optimisation, to avoid embedding rows another sync
   // has already stored. The authoritative check is inside the insert
   // transaction below, which re-reads the cursor under LMDB's write lock.
@@ -358,6 +365,11 @@ async function syncTranscript(
       : await generateExchangeEmbedding(exchange.userMessage, exchange.assistantMessage);
     pending.push({ exchange: { ...exchange, embeddingVersion: 1 }, embedding });
   }
+  // Not the record that was parsed any more, or gone: nothing is stored and
+  // the cursor stays as it is, for the next sync to go by. Nothing is awaited
+  // between this check and the insert, and the insert cannot take the check
+  // into its transaction.
+  if (record !== undefined && recordIdentity(filePath) !== record) return { indexed: 0, archived, candidate };
   const { ids } = insertExchangesForFile(store, filePath, pending);
   return { indexed: ids.length, archived, candidate };
 }

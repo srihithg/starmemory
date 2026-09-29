@@ -163,8 +163,52 @@ function entryProblem(input) {
 function forgottenMessage(session) {
     return `The user asked to forget session ${session}, so nothing was recorded. Do not call remember for it again.`;
 }
+/** The generation is drawn afresh for every record started, so a record
+ * started again under a key it had before never has the same header
+ * (recordIdentity). */
 function headerLine(session, project, now) {
-    return JSON.stringify({ type: COWORK_SESSION_LINE_TYPE, version: 1, session, project, createdAt: now.toISOString() });
+    const generation = crypto.randomBytes(8).toString('hex');
+    return JSON.stringify({ type: COWORK_SESSION_LINE_TYPE, version: 1, session, project, createdAt: now.toISOString(), generation });
+}
+/** Far more than a header line takes. */
+const HEADER_READ_BYTES = 4096;
+/** What tells the record at `file` from any other started under the same
+ * key, read from the file as it is now: its header line, whose generation
+ * is new for every record. A record written before generations has only its
+ * start time there, so the file itself, device and inode, counts too. Any
+ * other file in the records folder is taken the same way, by its first
+ * line. Undefined when the file cannot be read. */
+export function recordIdentity(file) {
+    let fd;
+    try {
+        fd = fs.openSync(file, 'r');
+    }
+    catch {
+        return undefined;
+    }
+    try {
+        const { dev, ino } = fs.fstatSync(fd);
+        const head = Buffer.alloc(HEADER_READ_BYTES);
+        const text = head.subarray(0, fs.readSync(fd, head, 0, head.length, 0)).toString('utf8');
+        const newline = text.indexOf('\n');
+        const header = newline === -1 ? text : text.slice(0, newline);
+        return hasGeneration(header) ? header : `${dev}:${ino}:${header}`;
+    }
+    catch {
+        return undefined;
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+}
+function hasGeneration(header) {
+    try {
+        const parsed = JSON.parse(header);
+        return parsed.type === COWORK_SESSION_LINE_TYPE && typeof parsed.generation === 'string' && parsed.generation !== '';
+    }
+    catch {
+        return false;
+    }
 }
 /** Characters that do not show, which a tag name can hide behind. */
 const INVISIBLE = /[\u200B-\u200D\u2060\uFEFF]/;
