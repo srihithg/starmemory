@@ -124,6 +124,7 @@ describe('the starmemory skill', () => {
 
   it('tells a session that has search and read but not remember and forget how to update the Mac', () => {
     const older = section('When only search and read are there, in Cowork');
+    expect(older).toContain('under one `mcp__remote-devices__<server>__` prefix');
     expect(older).toContain('the command in step 4');
   });
 });

@@ -13,11 +13,13 @@ English and Chinese.
 
 ## The tools
 
-There are four: `search`, `read`, `remember` and `forget`. Recognise them by those names, not by
-their prefix. In Claude Code they come from the plugin, as `mcp__plugin_starmemory_starmemory__search`
-and so on. In Cowork the Claude app serves them as `mcp__remote-devices__<server>__search`, where the
-server is `starmemserver` unless the user chose another name. All four names under one prefix are this
-server. They may be deferred: look them up with your tool search before deciding they are missing.
+There are four: `search`, `read`, `remember` and `forget`. Recognise them by those names sharing
+one prefix, whatever the prefix is. In Claude Code they come from the plugin, as
+`mcp__plugin_starmemory_starmemory__search` and so on. In Cowork the Claude app serves them as
+`mcp__remote-devices__<server>__search`, where the server is `starmemserver` unless the user chose
+another name. All four names under one prefix are this server. Other connectors can have a `search`
+or a `read` of their own. Those are not this server, so never search past sessions through them.
+The four may be deferred: look them up with your tool search before deciding they are missing.
 
 ## Search before answering
 
@@ -153,13 +155,15 @@ quitting the app would end this session; give the user the command to run in Ter
 
 ## When only search and read are there, in Cowork
 
-If `search` and `read` are in this session but `remember` and `forget` are not, the Mac is running
-a copy of starmemory older than 0.4.0, from before those two tools. Keep searching as usual. At the
-end of your first reply, tell the user once that this session can't be recorded until that Mac is
-updated, and give the fix: the command in step 4 of the section above, pasted into Terminal on that
-Mac. On a Mac that already has starmemory, it updates it, then quits and reopens the Claude app. If
-the user asks not to record this session, tell them nothing is being recorded anyway, because
-`remember` isn't available here.
+If `search` and `read` are in this session under one `mcp__remote-devices__<server>__` prefix, and
+neither `remember` nor `forget` is under that same prefix, the Mac is running a copy of starmemory
+older than 0.4.0, from before those two tools. A `search` or a `read` under any other prefix is
+another connector's, and says nothing about starmemory. Keep searching as usual, through that
+server's `search` only. At the end of your first reply, tell the user once that this session can't
+be recorded until that Mac is updated, and give the fix: the command in step 4 of the section above,
+pasted into Terminal on that Mac. On a Mac that already has starmemory, it updates it, then quits
+and reopens the Claude app. If the user asks not to record this session, tell them nothing is being
+recorded anyway, because `remember` isn't available here.
 
 ## What this cannot do
 
