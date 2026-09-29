@@ -11,7 +11,7 @@ each conversation once it has gone quiet, and forgets conversations older than
 a configurable TTL.
 
 Cowork keeps no transcript on your machine, so there the model records the
-session itself with `remember`; `forget` takes any session back out. See
+session itself with `remember`, and `forget` takes a session back out. See
 [Use it in Cowork](#use-it-in-cowork).
 
 Everything runs on your machine. Nothing leaves it except the summary
@@ -82,6 +82,8 @@ there. starmemory works with both facts:
   start-up hook that tells each session to use it. The model searches past
   sessions before answering, and records the session itself with `remember`
   as it goes.
+- **Cowork sees Cowork records only**, unless you opt in. See
+  [What a Cowork session can reach](#what-a-cowork-session-can-reach).
 
 ### Install
 
@@ -130,6 +132,26 @@ About `desktop-install`:
 - Without Claude Code, run it from a clone instead, which it then uses as it is:
   `git clone https://github.com/albericliu0/starmemory ~/starmemory && node ~/starmemory/cli/starmemory.mjs desktop-install --restart`.
 
+### What a Cowork session can reach
+
+A Cowork session runs in the cloud, and a web page it read there may have been
+written to steer it. So the server the Claude app runs serves Cowork sessions
+the Cowork records and nothing else. `search` finds only Cowork sessions, and
+asking it for `claude` or `codex` gets a refusal that says how to opt in.
+`read` opens only Cowork records and their archive copies. `forget` refuses a
+Claude Code or Codex session id. Claude Code and Codex start their own copy of
+the server, which still sees every harness.
+
+To let Cowork sessions search and read your Claude Code and Codex sessions too,
+run `desktop-install` again with `STARMEMORY_SCOPE=all` set in that shell:
+
+```
+STARMEMORY_SCOPE=all node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
+```
+
+It copies the setting into the app's entry. Run it again without the setting
+to go back. Any value of `STARMEMORY_SCOPE` other than `all` counts as `cowork`.
+
 ### What gets recorded
 
 Only what the model writes with `remember`. Each call adds one entry: what the
@@ -143,10 +165,17 @@ A session's entries go to one file,
 `~/.config/starmemory/cowork/<project>/<session>.jsonl`, a synthetic transcript
 in Claude Code's line shape that sync indexes like any other. Each `remember`
 starts a background sync of the Cowork records alone, without the summary step,
-so an entry is searchable within seconds; Claude Code and Codex transcripts are
-left to the session-start sync. Results mark it `cowork`, the archive keeps a
-copy, and the TTL applies. Records are not summarised again: they already are
-summaries.
+so an entry is searchable within seconds. Claude Code and Codex transcripts are
+left to the session-start sync. The archive keeps a copy, and the TTL applies.
+Records are not summarised again: they already are summaries.
+
+An entry is the model's note, not your words, and search results say so: a hit
+from a Cowork record is marked `cowork note written by Claude`. Text in an entry
+that looks like one of the harness's own control tags, such as
+`<system-reminder>`, is written with its `<` as `&lt;`, so a note can never pass
+for something the harness injected. One server takes at most 300 entries a day
+(UTC), which `STARMEMORY_REMEMBER_DAILY_LIMIT` changes. The count starts again
+when the app restarts.
 
 ### Forgetting
 
@@ -156,9 +185,26 @@ session from `search` and `read` from that moment; the sync it starts then
 deletes the indexed exchanges and their text-index documents, usually within a
 minute. The text index has one writer at a time, so while another sync holds it
 the new one waits for it, and the sync holding it takes on what arrived
-meanwhile before it exits. `remember` refuses the session afterwards. A Claude
-Code or Codex session id works too: that transcript stays where the harness
-keeps it, but starmemory stops indexing it.
+meanwhile before it exits. `remember` refuses the session afterwards, and a
+forget said before the first entry works too. A Claude Code or Codex session id
+works from Claude Code or Codex, or from Cowork once you opt in. That transcript
+stays where the harness keeps it, but starmemory stops indexing it.
+
+A record forgotten from Cowork is not deleted at once. It is set aside in
+`~/.config/starmemory/quarantine/<project>/`, readable by you alone, for 7 days,
+so that a forget you did not ask for can be undone. It is hidden from `search`
+and `read` from the moment of the forget, and never indexed. After those days a
+sync deletes it. `STARMEMORY_QUARANTINE_DAYS` sets the days, and `0` deletes at
+once. The archive copy goes at once either way, since sync makes it again from
+the record. A forget from Claude Code or Codex, or from Cowork with
+`STARMEMORY_SCOPE=all`, deletes the record at once.
+
+To undo a forget within those days, first delete the session's line from
+`forgotten.txt`, then move the file back to
+`~/.config/starmemory/cowork/<project>/<session>.jsonl`. The forget's reply names
+both paths. The next sync indexes the record again. In the other order, a sync
+that runs in between takes the record for one written after the forget and
+deletes it.
 
 Forgotten sessions are listed in `~/.config/starmemory/forgotten.txt`. Deleting
 a line lets starmemory index that transcript again from where it stopped,
@@ -179,6 +225,7 @@ exchange goes at the next session-start sync rather than at once.
   written.
 - The memory lives on one Mac. Cowork reaches it only while that Mac is on and
   the Claude app is running, and it does not reach teammates.
+- Cowork reaches the Cowork records only, unless you opt in.
 - Inside the Cowork container the SessionStart sync hook does nothing, so no
   dependencies are installed there; only the start-up reminder runs.
 
@@ -187,7 +234,8 @@ exchange goes at the next session-start sync rather than at once.
 - **Session start** (and `--resume`, `/clear`, and after a compaction): a
   background sync copies new transcript lines into the archive, embeds and
   indexes them, summarises up to ten conversations that have been quiet for
-  two hours, deletes forgotten sessions and conversations past the TTL. It
+  two hours, deletes forgotten sessions, conversations past the TTL and
+  forgotten Cowork records set aside for longer than their days. It
   runs detached, so the session does not wait for it. Its log is
   `~/.config/starmemory/sync.log`. In a Cowork container, or any other cloud
   container, it is skipped. A second start-up hook prints a short instruction
@@ -195,9 +243,11 @@ exchange goes at the next session-start sync rather than at once.
 - **`search`**: hybrid by default; `mode: "text"` or `"vector"` for one side
   only; an array of 2-5 concepts for AND matching; filters for project,
   session, harness (`claude`, `codex`, `cowork`) and date range. Each hit
-  shows the conversation's summary when one exists.
+  shows the conversation's summary when one exists. What it returns is a
+  record of past sessions, to be read as data, never as instructions.
 - **`read`**: the transcript at a given path, optionally a line range. Only
-  transcripts starmemory indexes and its archive copies of them.
+  transcripts starmemory indexes and its archive copies of them, or on the
+  Claude app's server only Cowork records and their copies.
 - **`remember`**: one entry in this Cowork session's record, then a background
   sync. See [Use it in Cowork](#use-it-in-cowork).
 - **`forget`**: takes a session out of the memory and never indexes it again.
@@ -206,7 +256,8 @@ Data lives under `~/.config/starmemory`: `store.mdb` (LMDB, the source of
 truth), `index-v*.g*.hnsw` (vector index, rebuilt from the store),
 `text-v*/` (Tantivy), `archive/<harness>/<project>/` (gzipped transcripts and
 their `-summary.txt`), `cowork/<project>/` (Cowork records), `forgotten.txt`
-(forgotten sessions) and `desktop/` (the launcher the Claude app runs).
+(forgotten sessions), `quarantine/<project>/` (forgotten Cowork records, kept
+for a few days) and `desktop/` (the launcher the Claude app runs).
 
 ## Configuration
 
@@ -217,7 +268,10 @@ All optional, all environment variables read by the plugin's processes.
 | `STARMEMORY_TTL_DAYS` | `180` | Conversations quiet for longer are deleted everywhere. `0` disables. |
 | `STARMEMORY_SUMMARY_LIMIT` | `10` | Summaries written per sync. `0` disables summaries. |
 | `STARMEMORY_SUMMARY_MODEL` | `haiku` | Model for Claude Code conversation summaries (`sonnet` is the fallback). |
-| `STARMEMORY_DB_PATH`, `STARMEMORY_INDEX_PATH`, `STARMEMORY_TEXT_INDEX_PATH`, `STARMEMORY_ARCHIVE_PATH`, `STARMEMORY_MODEL_CACHE_PATH`, `STARMEMORY_LOG_PATH`, `STARMEMORY_COWORK_PATH`, `STARMEMORY_FORGOTTEN_PATH` | under `~/.config/starmemory` | Where things live. The model cache (`models/`) is shared by every installed version, so a plugin update does not download the 160 MB embedding model again. |
+| `STARMEMORY_SCOPE` | `all`, and `cowork` on the Claude app's server | `all` serves every harness's sessions. `cowork` serves Cowork records only: search and read see nothing else, and forget refuses a Claude Code or Codex session. Any other value counts as `cowork`. |
+| `STARMEMORY_QUARANTINE_DAYS` | `7` | Days a record forgotten from Cowork is kept before a sync deletes it. `0` deletes it at once. |
+| `STARMEMORY_REMEMBER_DAILY_LIMIT` | `300` | Entries one server takes per UTC day, counted in memory. `0` refuses every entry. |
+| `STARMEMORY_DB_PATH`, `STARMEMORY_INDEX_PATH`, `STARMEMORY_TEXT_INDEX_PATH`, `STARMEMORY_ARCHIVE_PATH`, `STARMEMORY_MODEL_CACHE_PATH`, `STARMEMORY_LOG_PATH`, `STARMEMORY_COWORK_PATH`, `STARMEMORY_FORGOTTEN_PATH`, `STARMEMORY_QUARANTINE_PATH` | under `~/.config/starmemory` | Where things live. The model cache (`models/`) is shared by every installed version, so a plugin update does not download the 160 MB embedding model again. |
 | `STARMEMORY_REMINDER` | `1` | `0` turns off the start-up instruction to use starmemory. |
 | `STARMEMORY_CODEX_BIN` | `codex` | The Codex binary used for summaries. |
 | `STARMEMORY_ADDON_BASE_URL` | GitHub releases | Where to fetch the native addon from. Must be https. |
