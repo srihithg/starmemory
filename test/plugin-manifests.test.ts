@@ -35,7 +35,8 @@ describe('Codex plugin manifest', () => {
 });
 
 describe('the starmemory skill', () => {
-  const text = () => fs.readFileSync(path.join(root, 'skills', 'starmemory', 'SKILL.md'), 'utf8');
+  // A Windows checkout has CRLF line endings.
+  const text = () => fs.readFileSync(path.join(root, 'skills', 'starmemory', 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
   const frontmatter = () => {
     const block = text().match(/^---\n([\s\S]*?)\n---\n/)?.[1] ?? '';
     return Object.fromEntries(block.split('\n').map((line) => [line.slice(0, line.indexOf(':')), line.slice(line.indexOf(':') + 1).trim()]));

@@ -24,7 +24,11 @@ let env: Record<string, string>;
 let configFile: string;
 
 beforeEach(() => {
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'starmemory-desktop-'));
+  // Under the temp folder's full real path, so a path built here is the one
+  // node reports for a script under it, links resolved (/var is one on macOS),
+  // and also what fs.realpathSync.native gives, which expands a Windows short
+  // name such as RUNNER~1 that node keeps.
+  dir = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'starmemory-desktop-'));
   home = path.join(dir, 'home');
   fs.mkdirSync(home);
   // Only what the command needs, so nothing from this machine leaks in.

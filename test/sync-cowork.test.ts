@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openStore, exchangesFrom, filterIds, insertExchange, syncCursorKey, type StoreHandle } from '../src/store.js';
 import { VectorIndex } from '../src/vector-index.js';
 import { EMBEDDING_DIM, initEmbeddings } from '../src/embeddings.js';
@@ -264,7 +264,7 @@ function quietTranscript(session: string, question: string, ageMs: number): stri
 function holdWriter(textDir: string, ms: number): Promise<{ exited: Promise<number | null> }> {
   const textIndexModule = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'text-index.js');
   const script =
-    `import { TextIndex } from ${JSON.stringify(textIndexModule)};` +
+    `import { TextIndex } from ${JSON.stringify(pathToFileURL(textIndexModule).href)};` +
     'const t = TextIndex.open(process.argv[1]);' +
     "if (!t.tryAcquireWriter()) process.exit(2);" +
     "process.stdout.write('held\\n');" +
