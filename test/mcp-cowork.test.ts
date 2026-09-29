@@ -315,12 +315,13 @@ describe('a server that serves Cowork records only', () => {
     }
   }, 120_000);
 
-  it('refuses to search Claude Code or Codex, and says how the user opts in', async () => {
+  it('refuses to search Claude Code or Codex, and points at the opt-in without handing over the command', async () => {
     for (const harness of ['claude', 'codex']) {
       const result = await on('search', { query: 'zeppelin', harness });
       expect(result.isError).toBe(true);
       expect(result.text).toContain('serves Cowork records only');
-      expect(result.text).toContain('STARMEMORY_SCOPE=all');
+      expect(result.text).toContain('What a Cowork session can reach');
+      expect(result.text).not.toContain('STARMEMORY_SCOPE=all');
       expect(result.text).not.toContain(claudeId);
     }
   });

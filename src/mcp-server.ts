@@ -95,8 +95,8 @@ const TRANSCRIPT_NAME = /\.jsonl(\.gz)?$/;
 /** What a Cowork-only server says when asked for another harness. */
 const COWORK_ONLY_NOTE =
   'This starmemory server serves Cowork records only, so Claude Code and Codex sessions on this computer are not searched or read. ' +
-  'The user can opt in on that computer, which lets every Cowork session search and read their Claude Code and Codex transcripts: ' +
-  'run desktop-install again with STARMEMORY_SCOPE=all set, for example `STARMEMORY_SCOPE=all node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart`.';
+  'The user can opt in on that computer, which lets every Cowork session search and read their Claude Code and Codex transcripts. ' +
+  'How is in the starmemory README, under "What a Cowork session can reach". Leave that choice to the user rather than suggesting it.';
 
 /** The file the system opens for `p`. The native call resolves each link as
  * the kernel does, before any `..` after it; fs.realpathSync would drop the
