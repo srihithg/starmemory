@@ -6,9 +6,30 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_SERVER_NAME } from '../cli/desktop-install.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel: string) => JSON.parse(fs.readFileSync(path.join(root, rel), 'utf-8'));
+
+// Claude Code names each installed copy's cache folder after the manifest
+// version, while the addon download and the desktop launcher's pick of the
+// newest copy go by package.json, so every copy of the number has to agree.
+describe('plugin version', () => {
+  it('is package.json\'s in every manifest and in the lockfile', () => {
+    const marketplace = read('.claude-plugin/marketplace.json');
+    const lock = read('package-lock.json');
+    const found: Record<string, string> = {
+      '.claude-plugin/plugin.json': read('.claude-plugin/plugin.json').version,
+      '.claude-plugin/marketplace.json metadata': marketplace.metadata.version,
+      '.codex-plugin/plugin.json': read('.codex-plugin/plugin.json').version,
+      'package-lock.json': lock.version,
+      'package-lock.json root package': lock.packages[''].version,
+    };
+    for (const plugin of marketplace.plugins) found[`.claude-plugin/marketplace.json plugin ${plugin.name}`] = plugin.version;
+    const version = read('package.json').version;
+    expect(found).toEqual(Object.fromEntries(Object.keys(found).map((where) => [where, version])));
+  });
+});
 
 describe('Codex plugin manifest', () => {
   const manifest = () => read('.codex-plugin/plugin.json');
@@ -57,6 +78,29 @@ describe('the starmemory skill', () => {
   // test/mcp-cowork.test.ts pins these as the server's tool list.
   it('names the four tools the server registers', () => {
     for (const tool of ['search', 'read', 'remember', 'forget']) expect(text()).toContain(`\`${tool}\``);
+  });
+
+  it('names every tool the server source registers, so a new one is not left out', () => {
+    const source = fs.readFileSync(path.join(root, 'src', 'mcp-server.ts'), 'utf8');
+    const registered = [...source.matchAll(/registerTool\(\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(registered).toEqual(expect.arrayContaining(['search', 'read', 'remember', 'forget']));
+    for (const tool of registered) expect(text()).toContain(`\`${tool}\``);
+  });
+
+  it('names the tools as Cowork serves them, under the server name desktop-install registers', () => {
+    expect(text()).toContain('mcp__remote-devices__<server>__search');
+    expect(text()).toContain(`\`${DEFAULT_SERVER_NAME}\``);
+  });
+
+  it('gives the same install command as the README', () => {
+    const command = (s: string) => s.match(/^\s*(claude plugin marketplace add .* desktop-install --restart)$/m)?.[1];
+    const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+    expect(command(text())).toBeDefined();
+    expect(command(text())).toBe(command(readme));
+  });
+
+  it('tells a session that has search and read but not remember and forget how to update the Mac', () => {
+    expect(text()).toContain('claude plugin update starmemory');
   });
 });
 
