@@ -118,7 +118,7 @@ describe('desktop-install', () => {
 
       expect(status).toBe(0);
       expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION });
-      expect(output).toContain('or whichever version of starmemory@acme Claude Code has installed newest at launch');
+      expect(output).toContain('then at each launch the newest copy of starmemory@acme Claude Code has installed, the newest with its dependencies installed first');
     }
   });
 
@@ -660,6 +660,65 @@ describe('the stable launcher', () => {
     expect(resolvePluginRoot(launch)).toBe(older);
     fs.rmSync(path.join(older, 'node_modules', 'zod'), { recursive: true });
     expect(resolvePluginRoot(launch)).toBe(newest);
+  });
+
+  it('has desktop-install prepare the newest copy, not an older one prepared already, and say which one starts', () => {
+    const cache = path.join(home, '.claude', 'plugins', 'cache', 'acme', 'starmemory');
+    const at = (version: string) => {
+      const copy = freshCopy(path.join(cache, version));
+      const pkg = JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8'));
+      fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ ...pkg, version }));
+      return copy;
+    };
+    const older = prepare(at('0.3.0'));
+    const newer = at('0.4.0');
+    // desktop-install run from the new copy just after an update, with a
+    // prepare that does what npm install does, or fails.
+    const run = (prepares: boolean) => {
+      const script = `
+        import { main } from ${JSON.stringify(pathToFileURL(path.join(newer, 'cli', 'desktop-install.mjs')).href)};
+        import fs from 'node:fs';
+        import path from 'node:path';
+        const prepared = [];
+        const lines = [];
+        const code = await main(['--config', ${JSON.stringify(path.join(dir, 'config.json'))}], {
+          appRunning: () => false,
+          appConfig: ${JSON.stringify(path.join(dir, 'the-apps-own.json'))},
+          prepare: async (copy) => {
+            prepared.push(copy);
+            if (!${prepares}) return false;
+            fs.mkdirSync(path.join(copy, 'native'), { recursive: true });
+            fs.writeFileSync(path.join(copy, 'native', \`starmemory_native.\${process.platform}-\${process.arch}.node\`), '');
+            for (const name of Object.keys(JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8')).dependencies)) {
+              fs.mkdirSync(path.join(copy, 'node_modules', name), { recursive: true });
+              fs.writeFileSync(path.join(copy, 'node_modules', name, 'package.json'), '{}');
+            }
+            return true;
+          },
+          out: (line) => lines.push(line),
+          err: (line) => lines.push(line),
+        });
+        process.stdout.write(JSON.stringify({ code, prepared, output: lines.join('\\n') }));
+      `;
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8', timeout: 60_000 });
+      return JSON.parse(r.stdout || JSON.stringify({ stderr: r.stderr }));
+    };
+
+    const failed = run(false);
+
+    expect(failed.prepared).toEqual([newer]);
+    expect(failed.output).toContain(`starts    ${older}, then`);
+    expect(failed.output).toContain(`newest    ${newer}, which starts once its dependencies are installed\n`);
+    expect(failed.output).not.toContain('the app\'s first launch tries again');
+    expect(resolvePluginRoot(readLaunch())).toBe(older);
+
+    const done = run(true);
+
+    expect(done.code).toBe(0);
+    expect(done.prepared).toEqual([newer]);
+    expect(done.output).toContain(`starts    ${newer}, then`);
+    expect(done.output).not.toContain('newest    ');
+    expect(resolvePluginRoot(readLaunch())).toBe(newer);
   });
 
   it('calls a copy prepared only when what ensureReady checks is there', () => {

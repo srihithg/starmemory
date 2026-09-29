@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot } from './desktop-launch.mjs';
+import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot, startableCopies } from './desktop-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,7 +42,8 @@ can search, read, remember and forget.
   --replace       let --name take over an entry of that name that is not starmemory's
   --restart       quit the Claude app, make the change, and open it again (macOS)
   --config <file> edit this config file instead of the app's own
-  --no-prepare    do not install starmemory's dependencies now; the first launch does`;
+  --no-prepare    do not install starmemory's dependencies now; the app starts a copy that has
+                  them, or installs them at its first launch`;
 
 export class UsageError extends Error {}
 export class InvalidConfigError extends Error {}
@@ -469,14 +470,15 @@ export async function main(argv, deps = {}) {
 
   const root = path.resolve(here, '..');
   const launch = launchConfig({ root, pluginsDir: pluginsDirOf(env) });
-  const serverRoot = resolvePluginRoot(launch);
   // The shim beside this file, which is the one installLauncher copies.
   const node = nodeTheAppFinds(here, { env, platform });
 
-  if (opts.prepare && serverRoot) {
-    const ready = await prepare(serverRoot);
-    if (!ready) err('starmemory: its dependencies could not be installed now (see above); the app\'s first launch tries again.');
-  }
+  // The newest copy is the one to prepare. The launcher starts a prepared copy
+  // ahead of it, so which one starts is known only once that is done.
+  const [newest] = startableCopies(launch);
+  const ready = opts.prepare && newest ? await prepare(newest) : true;
+  const serverRoot = resolvePluginRoot(launch);
+  if (!ready) err(`starmemory: its dependencies could not be installed now (see above)${serverRoot === newest ? "; the app's first launch tries again." : '.'}`);
 
   let quit = false;
   if (running && opts.restart) {
@@ -535,8 +537,11 @@ export async function main(argv, deps = {}) {
     out(`  launcher  ${launcher}`);
     out(
       `  starts    ${serverRoot ?? 'nothing yet: no runnable copy was found'}` +
-        (launch.follow ? `, or whichever version of ${launch.plugin} Claude Code has installed newest at launch` : '')
+        (launch.follow ? `, then at each launch the newest copy of ${launch.plugin} Claude Code has installed, the newest with its dependencies installed first` : '')
     );
+    if (serverRoot !== newest) {
+      out(`  newest    ${newest}, which starts once its dependencies are installed${opts.prepare ? '' : ': run this without --no-prepare to install them'}`);
+    }
     out(nodeLine(node));
     if (entry.env) out(`  settings  ${Object.keys(entry.env).join(', ')}, copied from this shell`);
     if (replaced.length > 0) out(`  replaced  the earlier entry ${replaced.map((n) => `"${n}"`).join(', ')}`);

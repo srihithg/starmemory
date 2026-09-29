@@ -167,26 +167,31 @@ export function cachedCopies(pluginsDir, marketplace) {
   return listDir(plugin).map((version) => path.join(plugin, version));
 }
 
-/** The copy to start. With `follow`, the newest copy of starmemory from
- * `marketplace` that Claude Code has installed, as its record lists them, else
- * as its cache holds them, and only one really in that plugin's cache folder,
- * since a recorded path can point anywhere. A launch.json from before the
- * marketplace was recorded gets it from `root`. Without `follow`, or when no
- * installed copy is left, the copy desktop-install ran from. */
-export function resolvePluginRoot({ root, pluginsDir, follow, marketplace }) {
+/** The copies the launcher may start, newest first. With `follow`, the copies
+ * of starmemory from `marketplace` that Claude Code has installed, as its
+ * record lists them, else as its cache holds them, and only those really in
+ * that plugin's cache folder, since a recorded path can point anywhere. A
+ * launch.json from before the marketplace was recorded gets it from `root`.
+ * Without `follow`, or when no installed copy is left, the copy
+ * desktop-install ran from. */
+export function startableCopies({ root, pluginsDir, follow, marketplace }) {
   const from = follow && pluginsDir ? (marketplace ?? marketplaceOf(root, pluginsDir)) : undefined;
   if (isMarketplaceName(from)) {
     const cache = path.join(pluginsDir, 'cache', from, 'starmemory');
-    // A prepared one first: just after an update the newest usually is not,
-    // and the app's first launch would wait on npm install.
-    const pick = (dirs) => {
-      const copies = newestFirst(dirs.filter((dir) => isWithin(dir, cache)));
-      return copies.find(isPrepared) ?? copies[0];
-    };
-    const installed = pick(recordedInstallPaths(pluginsDir, from)) ?? pick(cachedCopies(pluginsDir, from));
-    if (installed) return installed;
+    const within = (dirs) => newestFirst(dirs.filter((dir) => isWithin(dir, cache)));
+    const recorded = within(recordedInstallPaths(pluginsDir, from));
+    const installed = recorded.length > 0 ? recorded : within(cachedCopies(pluginsDir, from));
+    if (installed.length > 0) return installed;
   }
-  return isStarmemoryRoot(root) ? root : undefined;
+  return isStarmemoryRoot(root) ? [root] : [];
+}
+
+/** The copy to start: the newest of startableCopies that is prepared, else
+ * the newest. A prepared one first: just after an update the newest usually
+ * is not, and the app's first launch would wait on npm install. */
+export function resolvePluginRoot(launch) {
+  const copies = startableCopies(launch);
+  return copies.find(isPrepared) ?? copies[0];
 }
 
 function fail(message) {
