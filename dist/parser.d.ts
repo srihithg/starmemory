@@ -27,13 +27,17 @@ export declare const COWORK_SESSION_LINE_TYPE = "cowork_session";
  * Unknown or empty files are read as Claude, the format that existed first.
  * Works on an archive copy too, since openArchive undoes the gzip. */
 export declare function detectHarness(filePath: string): Promise<Harness>;
+/** detectHarness for a file whose text the caller holds already. */
+export declare function harnessOfText(text: string): Harness;
 /** The sessions a transcript's or archive copy's file name says it holds:
  * the name itself, which is the session for Claude Code and Cowork, and for
- * a Codex rollout the id its name ends in. */
-export declare function sessionsOfName(filePath: string): string[];
+ * a Codex rollout, `harness` codex, the id its name ends in. Any other file's
+ * name is read whole, so a Cowork record whose key only looks like a
+ * rollout's name belongs to that key alone. */
+export declare function sessionsOfName(filePath: string, harness: Harness | undefined): string[];
 /** The sessions a transcript or archive copy belongs to, given its text:
- * what its name says (sessionsOfName) and every id any of its lines
- * records, so a session that joins a file late is found as well as the one
+ * what its name says (sessionsOfName, as the harness its lines are in) and
+ * every id any of its lines records, so a session that joins a file late is found as well as the one
  * it starts with. */
 export declare function sessionIdsOf(filePath: string, text: string): Set<string>;
 /** `sessions`, when given, gets every session id the file's lines record

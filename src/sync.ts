@@ -293,6 +293,7 @@ async function syncTranscript(
   {
     archiveRoot,
     coworkRoot,
+    codexDir,
     cutoff,
     forgotten,
     forgottenNow,
@@ -302,6 +303,8 @@ async function syncTranscript(
   }: {
     archiveRoot: string;
     coworkRoot: string;
+    /** Where Codex keeps its rollouts (harnessTranscriptDirs). */
+    codexDir: string;
     cutoff: number;
     forgotten: ReadonlySet<string>;
     forgottenNow: () => ReadonlySet<string>;
@@ -356,10 +359,13 @@ async function syncTranscript(
   // deleted is not brought back, so nothing is ever indexed twice. Whose it
   // is: its name and every session any of its lines records, as read and the
   // summaries also go by (forget.ts, isForgotten), since the copy would hold
-  // all of it. A match on this sync's list, read when it started, is
+  // all of it. The name is read for a rollout's id only for a Codex rollout,
+  // by its lines or its folder: a record whose key looks like one belongs to
+  // its key alone. A match on this sync's list, read when it started, is
   // confirmed on the list as it is now: the user may have taken the forget
   // back since, and written a new record.
-  const sessions = [...new Set([...sessionsOfName(filePath), ...lineSessions])];
+  const nameHarness = harness === 'codex' || isInside(filePath, codexDir) ? 'codex' : harness;
+  const sessions = [...new Set([...sessionsOfName(filePath, nameHarness), ...lineSessions])];
   const leaveOut = (): TranscriptOutcome => {
     // Only a file in the records folder is ours, as with the TTL above: one
     // elsewhere that reads as a record is still a file some harness wrote.
@@ -448,7 +454,7 @@ export async function syncAll(
     coworkRoot,
     quarantine,
     now,
-    isForgotten: (record) => isForgotten(sessionsOfName(record), readForgotten(forgottenPath)),
+    isForgotten: (record) => isForgotten(sessionsOfName(record, 'cowork'), readForgotten(forgottenPath)),
   });
   for (const { aside, to } of swept) {
     log(`starmemory: ${to === undefined ? `deleted ${aside}` : `moved ${aside} to ${to}`}, left aside by a removal that did not finish`);
@@ -471,6 +477,7 @@ export async function syncAll(
   }
 
   const dirs = Array.isArray(transcriptsDirs) ? transcriptsDirs : [transcriptsDirs];
+  const codexDir = harnessTranscriptDirs().codex;
   for (const filePath of walkAll(dirs, quarantine?.root ?? defaultQuarantineRoot())) {
     filesScanned++;
     let outcome: TranscriptOutcome;
@@ -478,6 +485,7 @@ export async function syncAll(
       outcome = await syncTranscript(store, filePath, {
         archiveRoot,
         coworkRoot,
+        codexDir,
         cutoff,
         forgotten,
         forgottenNow: () => readForgotten(forgottenPath),

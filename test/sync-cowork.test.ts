@@ -520,6 +520,31 @@ describe('taking a forget back, and what goes by the file name', () => {
     return file;
   };
 
+  it('keeps a Cowork record whose key reads like a Codex rollout\'s name when the session its end names is forgotten', async () => {
+    const key = 'rollout-2026-09-28T10-00-00-victim';
+    const { file } = remember(coworkRoot, entry(key, 'Trim it flat.'));
+    // A Codex rollout of that session, named for it, with no session_meta line to say so.
+    const codexDir = path.join(dir, 'codex');
+    const rolloutFile = path.join(codexDir, '2026', '09', '28', 'rollout-2026-09-28T11-00-00-victim.jsonl');
+    fs.mkdirSync(path.dirname(rolloutFile), { recursive: true });
+    const turn = (role: string, type: string, text: string) => ({ timestamp: '2026-09-28T11:00:00.000Z', type: 'response_item', payload: { type: 'message', role, content: [{ type, text }] } });
+    fs.writeFileSync(rolloutFile, [turn('user', 'input_text', 'asked in codex'), turn('assistant', 'output_text', 'answered in codex')].map((l) => `${JSON.stringify(l)}\n`).join(''));
+    const dirs = [coworkRoot, codexDir];
+    await sync({}, { dirs });
+    const harnesses = () => exchangesFrom(store, 0).map((r) => r.harness).sort();
+    expect(harnesses()).toEqual(['codex', 'cowork']);
+
+    forget('victim', { coworkRoot, forgottenPath, archiveRoot, store });
+    await sync({}, { dirs });
+
+    expect({
+      record: fs.existsSync(file),
+      copy: fs.existsSync(path.join(archiveRoot, 'cowork', 'lanterns', `${key}.jsonl.gz`)),
+      setAside: findSetAside(quarantineRoot, key),
+      rows: harnesses(),
+    }).toEqual({ record: true, copy: true, setAside: [], rows: ['cowork'] });
+  }, 120_000);
+
   it('once a forget is taken back, indexes what comes next and nothing the forget deleted, whichever sync did the deleting', async () => {
     const file = claudeTranscript('cc-1', 'cc-1');
     const dirs = [path.join(dir, 'claude')];

@@ -103,8 +103,8 @@ export function isForgotten(sessions: Iterable<string | undefined>, list: Readon
 }
 
 /** The sessions a stored row belongs to, for isForgotten. */
-export function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath'>): (string | undefined)[] {
-  return [row.sessionId, ...sessionsOfName(row.archivePath)];
+export function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath' | 'harness'>): (string | undefined)[] {
+  return [row.sessionId, ...sessionsOfName(row.archivePath, row.harness)];
 }
 
 /** Every stored row that belongs to a session on `list` (rowSessions). The
@@ -158,7 +158,8 @@ function listDir(dir: string): string[] {
  * points at: a copy taken before the conversation had a whole exchange, whose
  * source may be gone. A copy is named after its transcript, so it counts
  * when its name says the session (parser.ts, sessionsOfName), as sync and
- * the rows go by: the whole name, or for a Codex rollout the id it ends in. */
+ * the rows go by: the whole name, or for a copy under codex/ the id a
+ * rollout's name ends in. */
 function copiesByName(archiveRoot: string, session: string, harnesses: readonly Harness[] = HARNESSES): string[] {
   const key = new Set([session]);
   const found: string[] = [];
@@ -167,7 +168,7 @@ function copiesByName(archiveRoot: string, session: string, harnesses: readonly 
     for (const project of listDir(harnessDir)) {
       const dir = path.join(harnessDir, project);
       for (const name of listDir(dir)) {
-        if (name.endsWith('.jsonl.gz') && isForgotten(sessionsOfName(name), key)) found.push(path.join(dir, name));
+        if (name.endsWith('.jsonl.gz') && isForgotten(sessionsOfName(name, harness), key)) found.push(path.join(dir, name));
       }
     }
   }
@@ -204,9 +205,11 @@ function heldByAnotherHarness(
   for (const project of listDir(dirs.claude)) {
     if (fs.existsSync(path.join(dirs.claude, project, session))) return true;
   }
+  // Read as a rollout's name in either folder: whether sync takes the id from
+  // it goes by the file's lines, which this does not open.
   const key = new Set([session]);
   for (const dir of [dirs.claude, dirs.codex]) {
-    for (const file of walkJsonlFiles(dir, coworkRoot)) if (isForgotten(sessionsOfName(file), key)) return true;
+    for (const file of walkJsonlFiles(dir, coworkRoot)) if (isForgotten(sessionsOfName(file, 'codex'), key)) return true;
   }
   return false;
 }

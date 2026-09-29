@@ -30,7 +30,7 @@ import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { search, searchMultipleConcepts } from './search.js';
 import { DailyCap, LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, defaultQuarantineDays, defaultQuarantineRoot, defaultRememberDailyLimit, describeRemember, remember, serverScope, } from './cowork.js';
 import { defaultForgottenPath, describeForget, forget, isForgotten, readForgotten } from './forget.js';
-import { sessionIdsOf, sessionsOfName } from './parser.js';
+import { harnessOfText, sessionIdsOf, sessionsOfName } from './parser.js';
 import { defaultTranscriptDirs, harnessTranscriptDirs } from './sync.js';
 import { canStartSync, createSyncTrigger } from './sync-trigger.js';
 import { HARNESSES } from './types.js';
@@ -196,7 +196,7 @@ server.registerTool('read', {
     // opens. It must not, nor a file with a forgotten session's turns
     // anywhere in it.
     const text = readArchive(real);
-    if (isForgotten([...sessionIdsOf(real, text), ...sessionsOfName(filePath)], forgottenNow())) {
+    if (isForgotten([...sessionIdsOf(real, text), ...sessionsOfName(filePath, harnessOfText(text))], forgottenNow())) {
         return { content: [{ type: 'text', text: 'The user asked to forget that session, so it is not shown.' }], isError: true };
     }
     const lines = text.split('\n');

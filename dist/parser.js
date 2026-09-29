@@ -106,17 +106,9 @@ export async function detectHarness(filePath) {
     const rl = readline.createInterface({ input, crlfDelay: Infinity });
     try {
         for await (const line of rl) {
-            if (!line.trim())
-                continue;
-            try {
-                const parsed = JSON.parse(line);
-                if (parsed.type === COWORK_SESSION_LINE_TYPE)
-                    return 'cowork';
-                return parsed.payload && parsed.type && CODEX_LINE_TYPES.has(parsed.type) ? 'codex' : 'claude';
-            }
-            catch {
-                continue;
-            }
+            const harness = harnessOfLine(line);
+            if (harness)
+                return harness;
         }
     }
     finally {
@@ -125,14 +117,44 @@ export async function detectHarness(filePath) {
     }
     return 'claude';
 }
+/** detectHarness for a file whose text the caller holds already. */
+export function harnessOfText(text) {
+    for (let start = 0; start < text.length;) {
+        const end = text.indexOf('\n', start);
+        const harness = harnessOfLine(text.slice(start, end === -1 ? text.length : end));
+        if (harness)
+            return harness;
+        if (end === -1)
+            break;
+        start = end + 1;
+    }
+    return 'claude';
+}
+/** The format the first parseable line says a file is in; undefined for a
+ * blank line or one that is not JSON. */
+function harnessOfLine(line) {
+    if (!line.trim())
+        return undefined;
+    try {
+        const parsed = JSON.parse(line);
+        if (parsed.type === COWORK_SESSION_LINE_TYPE)
+            return 'cowork';
+        return parsed.payload && parsed.type && CODEX_LINE_TYPES.has(parsed.type) ? 'codex' : 'claude';
+    }
+    catch {
+        return undefined;
+    }
+}
 /** A Codex rollout's name: the time it started, then its session id. */
 const ROLLOUT_NAME = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$/;
 /** The sessions a transcript's or archive copy's file name says it holds:
  * the name itself, which is the session for Claude Code and Cowork, and for
- * a Codex rollout the id its name ends in. */
-export function sessionsOfName(filePath) {
+ * a Codex rollout, `harness` codex, the id its name ends in. Any other file's
+ * name is read whole, so a Cowork record whose key only looks like a
+ * rollout's name belongs to that key alone. */
+export function sessionsOfName(filePath, harness) {
     const name = path.basename(filePath).replace(/\.gz$/, '').replace(/\.jsonl$/, '');
-    const rollout = ROLLOUT_NAME.exec(name)?.[1];
+    const rollout = harness === 'codex' ? ROLLOUT_NAME.exec(name)?.[1] : undefined;
     return rollout ? [name, rollout] : [name];
 }
 /** The session ids one parsed line records: the sessionId on Claude Code's
@@ -162,11 +184,11 @@ function sessionIdsInLines(lines) {
     return ids;
 }
 /** The sessions a transcript or archive copy belongs to, given its text:
- * what its name says (sessionsOfName) and every id any of its lines
- * records, so a session that joins a file late is found as well as the one
+ * what its name says (sessionsOfName, as the harness its lines are in) and
+ * every id any of its lines records, so a session that joins a file late is found as well as the one
  * it starts with. */
 export function sessionIdsOf(filePath, text) {
-    return new Set([...sessionsOfName(filePath), ...sessionIdsInLines(text.split('\n'))]);
+    return new Set([...sessionsOfName(filePath, harnessOfText(text)), ...sessionIdsInLines(text.split('\n'))]);
 }
 /** `sessions`, when given, gets every session id the file's lines record
  * (sessionIdsOf), those of lines that make no exchange included, from the

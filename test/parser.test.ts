@@ -9,6 +9,7 @@ import {
   parseConversation,
   isInjectedUserTurn,
   payloadOfInjectedTurn,
+  sessionsOfName,
 } from '../src/parser.js';
 
 let dir: string;
@@ -49,6 +50,19 @@ const NOTIFICATION = `<task-notification>
 <result>compaction_manager.cpp:347 holds _candidates_mutex then takes _tasks_mutex</result>
 <usage>input 12000 output 3400</usage>
 </task-notification>`;
+
+describe('sessionsOfName', () => {
+  const rollout = 'rollout-2026-05-12T18-00-00-019e4c75';
+
+  it('reads a Codex rollout\'s name for the session id it ends in, and any other file\'s name whole', () => {
+    expect(sessionsOfName(`/x/.codex/sessions/2026/05/12/${rollout}.jsonl`, 'codex')).toEqual([rollout, '019e4c75']);
+    expect(sessionsOfName(`/x/archive/codex/proj/${rollout}.jsonl.gz`, 'codex')).toEqual([rollout, '019e4c75']);
+    for (const harness of ['cowork', 'claude', undefined] as const) {
+      expect(sessionsOfName(`/x/cowork/lanterns/${rollout}.jsonl`, harness)).toEqual([rollout]);
+    }
+    expect(sessionsOfName('/x/cowork/lanterns/s-1.jsonl', 'cowork')).toEqual(['s-1']);
+  });
+});
 
 describe('isInjectedUserTurn', () => {
   it('accepts a typed prompt as a human message', () => {

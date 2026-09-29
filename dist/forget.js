@@ -88,7 +88,7 @@ export function isForgotten(sessions, list) {
 }
 /** The sessions a stored row belongs to, for isForgotten. */
 export function rowSessions(row) {
-    return [row.sessionId, ...sessionsOfName(row.archivePath)];
+    return [row.sessionId, ...sessionsOfName(row.archivePath, row.harness)];
 }
 /** Every stored row that belongs to a session on `list` (rowSessions). The
  * store indexes rows by session id but not by file, so this walks the rows,
@@ -110,7 +110,8 @@ function listDir(dir) {
  * points at: a copy taken before the conversation had a whole exchange, whose
  * source may be gone. A copy is named after its transcript, so it counts
  * when its name says the session (parser.ts, sessionsOfName), as sync and
- * the rows go by: the whole name, or for a Codex rollout the id it ends in. */
+ * the rows go by: the whole name, or for a copy under codex/ the id a
+ * rollout's name ends in. */
 function copiesByName(archiveRoot, session, harnesses = HARNESSES) {
     const key = new Set([session]);
     const found = [];
@@ -119,7 +120,7 @@ function copiesByName(archiveRoot, session, harnesses = HARNESSES) {
         for (const project of listDir(harnessDir)) {
             const dir = path.join(harnessDir, project);
             for (const name of listDir(dir)) {
-                if (name.endsWith('.jsonl.gz') && isForgotten(sessionsOfName(name), key))
+                if (name.endsWith('.jsonl.gz') && isForgotten(sessionsOfName(name, harness), key))
                     found.push(path.join(dir, name));
             }
         }
@@ -149,10 +150,12 @@ function heldByAnotherHarness(session, { rows, archiveRoot, coworkRoot, dirs }) 
         if (fs.existsSync(path.join(dirs.claude, project, session)))
             return true;
     }
+    // Read as a rollout's name in either folder: whether sync takes the id from
+    // it goes by the file's lines, which this does not open.
     const key = new Set([session]);
     for (const dir of [dirs.claude, dirs.codex]) {
         for (const file of walkJsonlFiles(dir, coworkRoot))
-            if (isForgotten(sessionsOfName(file), key))
+            if (isForgotten(sessionsOfName(file, 'codex'), key))
                 return true;
     }
     return false;

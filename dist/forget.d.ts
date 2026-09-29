@@ -24,7 +24,7 @@ export declare function addForgotten(file: string, session: string): void;
  * it are kept. */
 export declare function isForgotten(sessions: Iterable<string | undefined>, list: ReadonlySet<string>): boolean;
 /** The sessions a stored row belongs to, for isForgotten. */
-export declare function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath'>): (string | undefined)[];
+export declare function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath' | 'harness'>): (string | undefined)[];
 /** Every stored row that belongs to a session on `list` (rowSessions). The
  * store indexes rows by session id but not by file, so this walks the rows,
  * and only when the list is not empty. */
