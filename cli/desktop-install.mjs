@@ -16,6 +16,7 @@
 // Plain node, node: imports only: this runs from a fresh plugin copy, before
 // its dependencies are installed.
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -207,8 +208,10 @@ export function backupConfig(file, now = new Date()) {
 
 /** Written beside and renamed in, keeping the file's mode, so the app never
  * reads half a file. A config that is a link, into a dotfiles folder say, is
- * written where the link points, so the link stays one. */
-export function writeConfig(configPath, config) {
+ * written where the link points, so the link stays one. The file beside it has
+ * a name no one can guess, and is created new, never opened through a link or
+ * a file already there. */
+export function writeConfig(configPath, config, token = randomBytes(8).toString('hex')) {
   let file = configPath;
   try {
     file = fs.realpathSync(configPath);
@@ -221,13 +224,25 @@ export function writeConfig(configPath, config) {
     }
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.starmemory-${process.pid}.tmp`;
+  let mode = 0o600;
   try {
-    fs.writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    mode = fs.statSync(file).mode & 0o777;
+  } catch {
+    // no config yet: 0600, since it will hold credentials sooner or later
+  }
+  const temp = `${file}.starmemory-${token}.tmp`;
+  // Throws, touching nothing, when anything is at that name already.
+  const fd = fs.openSync(temp, 'wx', mode);
+  try {
     try {
-      fs.chmodSync(temp, fs.statSync(file).mode & 0o777);
-    } catch {
-      // no config yet: 0600, since it will hold credentials sooner or later
+      fs.writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+      try {
+        fs.fchmodSync(fd, mode); // the umask can have narrowed it
+      } catch {
+        // a file system without modes
+      }
+    } finally {
+      fs.closeSync(fd);
     }
     fs.renameSync(temp, file);
   } catch (error) {

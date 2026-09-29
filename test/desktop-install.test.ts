@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 // @ts-expect-error -- plain JS module, no type declarations by design
-import { DEFAULT_SERVER_NAME, desktopConfigPath, launcherDir, main } from '../cli/desktop-install.mjs';
+import { DEFAULT_SERVER_NAME, desktopConfigPath, launcherDir, main, writeConfig as writeConfigFile } from '../cli/desktop-install.mjs';
 // @ts-expect-error -- plain JS module, no type declarations by design
 import { isPrepared, resolvePluginRoot } from '../cli/desktop-launch.mjs';
 // @ts-expect-error -- plain JS module, no type declarations by design
@@ -237,6 +237,36 @@ describe('desktop-install', () => {
     expect(status).toBe(0);
     expect(output).toContain(`starts    ${real}`);
     expect(readLaunch().root).toBe(real);
+  });
+});
+
+describe('writing the config', () => {
+  it('keeps the config\'s mode and leaves nothing beside it', () => {
+    writeConfig(existingConfig);
+    if (process.platform !== 'win32') fs.chmodSync(configFile, 0o640);
+
+    writeConfigFile(configFile, { mcpServers: {} });
+
+    expect(readConfig()).toEqual({ mcpServers: {} });
+    if (process.platform !== 'win32') expect(fs.statSync(configFile).mode & 0o777).toBe(0o640);
+    expect(fs.readdirSync(path.dirname(configFile))).toEqual([path.basename(configFile)]);
+  });
+
+  it('never writes through a link at the name of its file beside the config', () => {
+    if (process.platform === 'win32') return; // symlinks need a privilege there
+    writeConfig(existingConfig);
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'untouched');
+    // The name the file beside the config used to have, which anyone could guess.
+    fs.symlinkSync(victim, `${configFile}.starmemory-${process.pid}.tmp`);
+    fs.symlinkSync(victim, `${configFile}.starmemory-guessed.tmp`);
+
+    writeConfigFile(configFile, { mcpServers: {} });
+    expect(() => writeConfigFile(configFile, { mcpServers: { again: {} } }, 'guessed')).toThrow(/EEXIST/);
+
+    expect(fs.readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(fs.lstatSync(`${configFile}.starmemory-guessed.tmp`).isSymbolicLink()).toBe(true);
+    expect(readConfig()).toEqual({ mcpServers: {} });
   });
 });
 
