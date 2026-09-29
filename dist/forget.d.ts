@@ -1,4 +1,4 @@
-import { type Quarantine } from './cowork.js';
+import { type Quarantine, type SetAside } from './cowork.js';
 import { type StoreHandle } from './store.js';
 import type { TextIndex } from './text-index.js';
 import { type RemoveResult } from './ttl.js';
@@ -19,11 +19,9 @@ export interface ForgetResult {
     records: string[];
     /** Entries those records held. */
     entries: number;
-    /** Where each record was set aside, when it was (see ForgetOptions.quarantine). */
-    setAside: {
-        from: string;
-        to: string;
-    }[];
+    /** Where each record was set aside, when it was (see ForgetOptions.quarantine),
+     * and until when. */
+    setAside: SetAside[];
     /** How long a set-aside record is kept before a sync deletes it. */
     setAsideDays: number;
     /** The list the session was put on. */

@@ -340,6 +340,17 @@ export interface Quarantine {
  * transcripts, sync's walk and `read` among them, takes one for a record. */
 export const QUARANTINE_SUFFIX = '.jsonl.forgotten';
 
+/** The latest time a Date can hold. */
+const MAX_DATE_MS = 8.64e15;
+
+/** When a set-aside record may be deleted, read from its name
+ * (quarantineRecord), or undefined for a name that does not carry one. */
+export function setAsideExpiry(name: string): number | undefined {
+  const match = /\.(\d{1,16})-[0-9a-f]+\.jsonl\.forgotten$/.exec(name);
+  const expiresAt = match ? Number(match[1]) : Number.NaN;
+  return Number.isSafeInteger(expiresAt) && expiresAt <= MAX_DATE_MS ? expiresAt : undefined;
+}
+
 /** Owner-only, since what it holds is what the user asked to forget. */
 function privateDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -358,34 +369,50 @@ function moveFile(from: string, to: string): void {
   }
 }
 
-/** Move every record of `session` into the quarantine, as
- * <quarantine>/<project>/<session>.<when>-<random>.jsonl.forgotten, readable by
- * the owner alone. The time and the random part keep a later forget of the
- * same key from overwriting an earlier one. Its mtime becomes `now`, which is
- * what purgeQuarantine counts from. Returns each record's old and new path and
- * how many entries they held. */
+export interface SetAside {
+  from: string;
+  to: string;
+  /** When a sync may delete it, in ms since the epoch. */
+  expiresAt: number;
+}
+
+/** Move one record, <root>/<project>/<session>.jsonl, into the quarantine, as
+ * <quarantine>/<project>/<session>.<expiresAt>-<random>.jsonl.forgotten,
+ * readable by the owner alone. The expiry goes in the name, so it is kept for
+ * `quarantine.days` whichever process's sync purges it, with whatever days
+ * that process was given. The random part keeps a later forget of the same key
+ * from overwriting an earlier one, and the name from being guessed. Its mtime
+ * becomes `now`. Throws, leaving the record where it was, when it cannot be
+ * moved. */
+export function quarantineRecord(from: string, quarantine: Quarantine, now: Date = new Date()): SetAside {
+  privateDir(quarantine.root);
+  const dir = path.join(quarantine.root, path.basename(path.dirname(from)));
+  privateDir(dir);
+  const session = path.basename(from, '.jsonl');
+  const expiresAt = Math.min(Math.round(now.getTime() + quarantine.days * DAY_MS), MAX_DATE_MS);
+  let to: string;
+  do {
+    to = path.join(dir, `${session}.${expiresAt}-${crypto.randomBytes(4).toString('hex')}${QUARANTINE_SUFFIX}`);
+  } while (fs.existsSync(to));
+  moveFile(from, to);
+  fs.chmodSync(to, 0o600);
+  fs.utimesSync(to, now, now);
+  return { from, to, expiresAt };
+}
+
+/** Move every record of `session` into the quarantine (quarantineRecord).
+ * Returns each record's old and new path and how many entries they held. */
 export function quarantineRecords(
   root: string,
   session: string,
   quarantine: Quarantine,
   now: Date = new Date()
-): { moved: { from: string; to: string }[]; entries: number } {
-  const moved: { from: string; to: string }[] = [];
+): { moved: SetAside[]; entries: number } {
+  const moved: SetAside[] = [];
   let entries = 0;
-  const when = now.toISOString().replace(/\.\d+Z$/, 'Z').replace(/[-:]/g, '');
   for (const from of findRecords(root, session)) {
     const count = countEntries(from);
-    privateDir(quarantine.root);
-    const dir = path.join(quarantine.root, path.basename(path.dirname(from)));
-    privateDir(dir);
-    let to: string;
-    do {
-      to = path.join(dir, `${session}.${when}-${crypto.randomBytes(4).toString('hex')}${QUARANTINE_SUFFIX}`);
-    } while (fs.existsSync(to));
-    moveFile(from, to);
-    fs.chmodSync(to, 0o600);
-    fs.utimesSync(to, now, now);
-    moved.push({ from, to });
+    moved.push(quarantineRecord(from, quarantine, now));
     entries += count;
   }
   return { moved, entries };
@@ -399,12 +426,12 @@ function listDir(dir: string): string[] {
   }
 }
 
-/** Delete the records set aside more than `days` ago. Only files named as
- * quarantineRecords names them, and a project folder only once this emptied
+/** Delete the set-aside records whose time is up: the expiry in the name, or
+ * for a name without one, `days` after its mtime. Only files named as
+ * quarantineRecord names them, and a project folder only once this emptied
  * it, so a quarantine path pointed at a folder that holds anything else
  * leaves the rest alone. Returns the files deleted. */
 export function purgeQuarantine({ root, days }: Quarantine, now: number = Date.now()): string[] {
-  const cutoff = now - days * DAY_MS;
   const purged: string[] = [];
   for (const project of listDir(root)) {
     const dir = path.join(root, project);
@@ -414,7 +441,7 @@ export function purgeQuarantine({ root, days }: Quarantine, now: number = Date.n
       const file = path.join(dir, name);
       try {
         const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.mtimeMs >= cutoff) continue;
+        if (!stat.isFile() || (setAsideExpiry(name) ?? stat.mtimeMs + days * DAY_MS) >= now) continue;
         fs.rmSync(file, { force: true });
         purged.push(file);
         emptied = true;

@@ -195,16 +195,20 @@ A record forgotten from Cowork is not deleted at once. It is set aside in
 so that a forget you did not ask for can be undone. It is hidden from `search`
 and `read` from the moment of the forget, and never indexed. After those days a
 sync deletes it. `STARMEMORY_QUARANTINE_DAYS` sets the days, and `0` deletes at
-once. The archive copy goes at once either way, since sync makes it again from
-the record. A forget from Claude Code or Codex, or from Cowork with
-`STARMEMORY_SCOPE=all`, deletes the record at once.
+once. The file is named `<session>.<expires>-<random>.jsonl.forgotten`, where
+`<expires>` is when it may be deleted, in milliseconds since 1970. Every sync
+goes by that name, so the days of the server that took the forget hold even for
+a sync started with other settings, Codex's for one. The archive copy goes at
+once either way, since sync makes it again from the record. A forget from
+Claude Code or Codex, or from Cowork with `STARMEMORY_SCOPE=all`, deletes the
+record at once.
 
 To undo a forget within those days, first delete the session's line from
-`forgotten.txt`, then move the file back to
-`~/.config/starmemory/cowork/<project>/<session>.jsonl`. The forget's reply names
-both paths. The next sync indexes the record again. In the other order, a sync
-that runs in between takes the record for one written after the forget and
-deletes it.
+`forgotten.txt`, then move the set-aside file back to
+`~/.config/starmemory/cowork/<project>/<session>.jsonl`, under that name. The
+forget's reply names both paths. The next sync indexes the record again. In the
+other order, a sync that runs in between takes the record for one written after
+the forget and deletes it.
 
 Forgotten sessions are listed in `~/.config/starmemory/forgotten.txt`. Deleting
 a line lets starmemory index that transcript again from where it stopped,
@@ -269,7 +273,7 @@ All optional, all environment variables read by the plugin's processes.
 | `STARMEMORY_SUMMARY_LIMIT` | `10` | Summaries written per sync. `0` disables summaries. |
 | `STARMEMORY_SUMMARY_MODEL` | `haiku` | Model for Claude Code conversation summaries (`sonnet` is the fallback). |
 | `STARMEMORY_SCOPE` | `all`, and `cowork` on the Claude app's server | `all` serves every harness's sessions. `cowork` serves Cowork records only: search and read see nothing else, and forget refuses a Claude Code or Codex session. Any other value counts as `cowork`. |
-| `STARMEMORY_QUARANTINE_DAYS` | `7` | Days a record forgotten from Cowork is kept before a sync deletes it. `0` deletes it at once. |
+| `STARMEMORY_QUARANTINE_DAYS` | `7` | Days a record forgotten from Cowork is kept before a sync deletes it, read by the server that takes the forget and written into the set-aside file's name. `0` deletes it at once. |
 | `STARMEMORY_REMEMBER_DAILY_LIMIT` | `300` | Entries one server takes per UTC day, counted in memory. `0` refuses every entry. |
 | `STARMEMORY_DB_PATH`, `STARMEMORY_INDEX_PATH`, `STARMEMORY_TEXT_INDEX_PATH`, `STARMEMORY_ARCHIVE_PATH`, `STARMEMORY_MODEL_CACHE_PATH`, `STARMEMORY_LOG_PATH`, `STARMEMORY_COWORK_PATH`, `STARMEMORY_FORGOTTEN_PATH`, `STARMEMORY_QUARANTINE_PATH` | under `~/.config/starmemory` | Where things live. The model cache (`models/`) is shared by every installed version, so a plugin update does not download the 160 MB embedding model again. |
 | `STARMEMORY_REMINDER` | `1` | `0` turns off the start-up instruction to use starmemory. |

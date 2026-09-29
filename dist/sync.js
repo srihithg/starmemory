@@ -238,7 +238,7 @@ export async function syncAll(store, index, transcriptsDirs = defaultTranscriptD
     const quarantine = options.quarantine;
     if (quarantine) {
         for (const file of purgeQuarantine(quarantine, now)) {
-            log(`starmemory: deleted ${file}, a Cowork record set aside by a forget more than ${quarantine.days} days ago`);
+            log(`starmemory: deleted ${file}, a Cowork record a forget set aside, now that its time there is up`);
         }
     }
     // Before touching anything else: if the model changed, every existing vector

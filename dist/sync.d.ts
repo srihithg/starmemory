@@ -71,7 +71,8 @@ export interface SyncOptions {
      * defaultCoworkRoot(). */
     coworkRoot?: string;
     /** Where forget sets Cowork records aside, and for how many days
-     * (src/cowork.ts). The sync deletes the ones set aside longer ago than that.
+     * (src/cowork.ts). The sync deletes the ones whose time is up, as their names
+     * say, or for a name that does not say, set aside longer ago than that.
      * It deletes, so it runs only when the caller names the quarantine, as the
      * CLI does with the defaults. The folder is never walked either way; its
      * default is defaultQuarantineRoot(). */

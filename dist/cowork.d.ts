@@ -125,21 +125,33 @@ export interface Quarantine {
 /** How a set-aside record's name ends. Not `.jsonl`, so nothing that looks for
  * transcripts, sync's walk and `read` among them, takes one for a record. */
 export declare const QUARANTINE_SUFFIX = ".jsonl.forgotten";
-/** Move every record of `session` into the quarantine, as
- * <quarantine>/<project>/<session>.<when>-<random>.jsonl.forgotten, readable by
- * the owner alone. The time and the random part keep a later forget of the
- * same key from overwriting an earlier one. Its mtime becomes `now`, which is
- * what purgeQuarantine counts from. Returns each record's old and new path and
- * how many entries they held. */
+/** When a set-aside record may be deleted, read from its name
+ * (quarantineRecord), or undefined for a name that does not carry one. */
+export declare function setAsideExpiry(name: string): number | undefined;
+export interface SetAside {
+    from: string;
+    to: string;
+    /** When a sync may delete it, in ms since the epoch. */
+    expiresAt: number;
+}
+/** Move one record, <root>/<project>/<session>.jsonl, into the quarantine, as
+ * <quarantine>/<project>/<session>.<expiresAt>-<random>.jsonl.forgotten,
+ * readable by the owner alone. The expiry goes in the name, so it is kept for
+ * `quarantine.days` whichever process's sync purges it, with whatever days
+ * that process was given. The random part keeps a later forget of the same key
+ * from overwriting an earlier one, and the name from being guessed. Its mtime
+ * becomes `now`. Throws, leaving the record where it was, when it cannot be
+ * moved. */
+export declare function quarantineRecord(from: string, quarantine: Quarantine, now?: Date): SetAside;
+/** Move every record of `session` into the quarantine (quarantineRecord).
+ * Returns each record's old and new path and how many entries they held. */
 export declare function quarantineRecords(root: string, session: string, quarantine: Quarantine, now?: Date): {
-    moved: {
-        from: string;
-        to: string;
-    }[];
+    moved: SetAside[];
     entries: number;
 };
-/** Delete the records set aside more than `days` ago. Only files named as
- * quarantineRecords names them, and a project folder only once this emptied
+/** Delete the set-aside records whose time is up: the expiry in the name, or
+ * for a name without one, `days` after its mtime. Only files named as
+ * quarantineRecord names them, and a project folder only once this emptied
  * it, so a quarantine path pointed at a folder that holds anything else
  * leaves the rest alone. Returns the files deleted. */
 export declare function purgeQuarantine({ root, days }: Quarantine, now?: number): string[];

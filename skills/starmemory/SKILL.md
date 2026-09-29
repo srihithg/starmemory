@@ -88,10 +88,11 @@ aside, going by the tool's reply.
 `forget` hides the session from search and read from that moment, and removes the archive copy and
 the summary at once. A background sync deletes its indexed exchanges, usually within a minute. In
 Cowork the record itself is set aside for a few days, so that a forget the user did not ask for can
-be undone, and then deleted. The reply says for how long and how to undo it. In Claude Code and
-Codex it is deleted at once. A Claude Code or Codex transcript stays where that tool keeps it, but
-starmemory stops reading it. In Cowork, `forget` refuses a Claude Code or Codex session id unless the
-user has opted in.
+be undone, and then deleted. The reply says until when, where the record was set aside, and how to
+undo it: take the session off the forgotten list, then move the set-aside file back to the path the
+reply names, under the record's own name. In Claude Code and Codex it is deleted at once. A Claude
+Code or Codex transcript stays where that tool keeps it, but starmemory stops reading it. In Cowork,
+`forget` refuses a Claude Code or Codex session id unless the user has opted in.
 
 To forget an earlier session, find it with `search` and confirm with the user which one it is. Its
 id is the file name in the result's path, without `.jsonl` or `.jsonl.gz`. For a Codex rollout it

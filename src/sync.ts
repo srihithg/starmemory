@@ -150,7 +150,8 @@ export interface SyncOptions {
    * defaultCoworkRoot(). */
   coworkRoot?: string;
   /** Where forget sets Cowork records aside, and for how many days
-   * (src/cowork.ts). The sync deletes the ones set aside longer ago than that.
+   * (src/cowork.ts). The sync deletes the ones whose time is up, as their names
+   * say, or for a name that does not say, set aside longer ago than that.
    * It deletes, so it runs only when the caller names the quarantine, as the
    * CLI does with the defaults. The folder is never walked either way; its
    * default is defaultQuarantineRoot(). */
@@ -363,7 +364,7 @@ export async function syncAll(
   const quarantine = options.quarantine;
   if (quarantine) {
     for (const file of purgeQuarantine(quarantine, now)) {
-      log(`starmemory: deleted ${file}, a Cowork record set aside by a forget more than ${quarantine.days} days ago`);
+      log(`starmemory: deleted ${file}, a Cowork record a forget set aside, now that its time there is up`);
     }
   }
 

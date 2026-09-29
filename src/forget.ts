@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archivePathFor, summaryPathFor } from './archive.js';
-import { RefusedError, deleteRecords, quarantineRecords, sessionKeyProblem, type Quarantine } from './cowork.js';
+import { RefusedError, deleteRecords, quarantineRecords, sessionKeyProblem, type Quarantine, type SetAside } from './cowork.js';
 import { projectFromPath, walkJsonlFiles } from './parser.js';
 import { filterIds, getExchange, syncCursorKey, type StoreHandle } from './store.js';
 import type { TextIndex } from './text-index.js';
@@ -92,8 +92,9 @@ export interface ForgetResult {
   records: string[];
   /** Entries those records held. */
   entries: number;
-  /** Where each record was set aside, when it was (see ForgetOptions.quarantine). */
-  setAside: { from: string; to: string }[];
+  /** Where each record was set aside, when it was (see ForgetOptions.quarantine),
+   * and until when. */
+  setAside: SetAside[];
   /** How long a set-aside record is kept before a sync deletes it. */
   setAsideDays: number;
   /** The list the session was put on. */
@@ -226,7 +227,7 @@ export function forget(
   const setAsideDays = quarantine?.days ?? 0;
   let files: string[];
   let entries: number;
-  let setAside: { from: string; to: string }[] = [];
+  let setAside: SetAside[] = [];
   if (quarantine && setAsideDays > 0) {
     // The cursor stays. Brought back before the sync has deleted its rows, the
     // record is the same file, and the cursor is what keeps its entries from
@@ -265,20 +266,22 @@ export function forget(
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const utc = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 /** What the model is told, to pass on to the user in a sentence. */
 export function describeForget(result: ForgetResult): string {
   const lines = [`Forgot session ${result.session}.`];
   const setAside = result.setAside.length > 0;
   if (setAside) {
-    const days = plural(result.setAsideDays, 'day', 'days');
+    const until = utc(Math.min(...result.setAside.map((m) => m.expiresAt)));
     lines.push(
       `Set aside now: its Cowork record, ${plural(result.entries, 'entry', 'entries')}. It is hidden from search and read from this moment, ` +
-        `and kept for ${days} (${result.setAside.map((m) => m.to).join(', ')}) so that a forget the user did not mean can be undone. After ${days} a sync deletes it for good.`
+        `and kept for ${plural(result.setAsideDays, 'day', 'days')}, until ${until} (${result.setAside.map((m) => m.to).join(', ')}), ` +
+        'so that a forget the user did not mean can be undone. After that a sync deletes it for good.'
     );
     lines.push(
-      `To undo it within ${days}: delete the line ${result.session} from ${result.forgottenPath}, then move the file back to ` +
-        `${result.setAside.map((m) => m.from).join(', ')}.`
+      `To undo it before then: delete the line ${result.session} from ${result.forgottenPath}, then move ` +
+        `${result.setAside.map((m) => `${m.to} back to ${m.from}`).join(', and ')}.`
     );
   }
   const removed = [

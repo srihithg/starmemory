@@ -29,6 +29,7 @@ import {
   remember,
   serverScope,
   sessionKeyProblem,
+  setAsideExpiry,
 } from '../src/cowork.js';
 import { detectHarness, parseConversation } from '../src/parser.js';
 
@@ -282,7 +283,11 @@ describe('the quarantine', () => {
     expect(moved).toHaveLength(1);
     expect(moved[0].from).toBe(file);
     expect(path.dirname(moved[0].to)).toBe(path.join(quarantine().root, 'starmemory'));
-    expect(path.basename(moved[0].to)).toMatch(/^cowork-2026-09-28-76aa87a1\.20260928T100000Z-[0-9a-f]{8}\.jsonl\.forgotten$/);
+    // Its expiry, 7 days on, is in the name, in ms since the epoch.
+    const expiresAt = Date.parse('2026-10-05T10:00:00.123Z');
+    expect(moved[0].expiresAt).toBe(expiresAt);
+    expect(path.basename(moved[0].to)).toMatch(new RegExp(`^cowork-2026-09-28-76aa87a1\\.${expiresAt}-[0-9a-f]{8}\\.jsonl\\.forgotten$`));
+    expect(setAsideExpiry(path.basename(moved[0].to))).toBe(expiresAt);
     expect(moved[0].to.endsWith('.jsonl')).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
     expect(findRecords(root, entry().session)).toEqual([]);
@@ -324,8 +329,38 @@ describe('the quarantine', () => {
     expect(purgeQuarantine(quarantine(), now)).toEqual([old.to]);
     expect(fs.existsSync(recent.to)).toBe(true);
     expect(fs.existsSync(foreign)).toBe(true);
-    expect(purgeQuarantine({ ...quarantine(), days: 0 }, now)).toEqual([recent.to]);
+    expect(purgeQuarantine(quarantine(), now + 2 * 24 * 60 * 60 * 1000)).toEqual([recent.to]);
     expect(fs.existsSync(foreign)).toBe(true);
+  });
+
+  it('keeps a record for the days it was set aside with, whatever days the purge is given', () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    remember(root, entry({ session: 'week' }));
+    remember(root, entry({ session: 'day' }));
+    const [week] = quarantineRecords(root, 'week', quarantine(), new Date(now - 2 * day)).moved;
+    const [short] = quarantineRecords(root, 'day', { ...quarantine(), days: 1 }, new Date(now - 2 * day)).moved;
+
+    // A purge with other days, as a sync started with other settings runs it.
+    expect(purgeQuarantine({ ...quarantine(), days: 0 }, now)).toEqual([short.to]);
+    expect(purgeQuarantine({ ...quarantine(), days: 30 }, now)).toEqual([]);
+    expect(fs.existsSync(week.to)).toBe(true);
+    expect(purgeQuarantine({ ...quarantine(), days: 30 }, week.expiresAt + 1)).toEqual([week.to]);
+  });
+
+  it('purges a record whose name carries no expiry by its mtime and the purge\'s days', () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const dir = path.join(quarantine().root, 'starmemory');
+    fs.mkdirSync(dir, { recursive: true });
+    const unnamed = path.join(dir, `older.20260928T100000Z-0a1b2c3d${QUARANTINE_SUFFIX}`);
+    fs.writeFileSync(unnamed, '{}\n');
+    const then = new Date(now - 3 * day);
+    fs.utimesSync(unnamed, then, then);
+
+    expect(setAsideExpiry(path.basename(unnamed))).toBeUndefined();
+    expect(purgeQuarantine(quarantine(), now)).toEqual([]);
+    expect(purgeQuarantine({ ...quarantine(), days: 2 }, now)).toEqual([unnamed]);
   });
 
   it('removes a project folder it empties, and purges nothing where there is no quarantine', () => {

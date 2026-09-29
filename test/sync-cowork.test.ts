@@ -729,7 +729,11 @@ describe('the quarantine, as sync sees it', () => {
     expect(fs.existsSync(old.to)).toBe(false);
     expect(fs.existsSync(recent.to)).toBe(true);
 
+    // A sync with other days, Codex's for one, which does not pass the
+    // setting on, keeps it for the days it was set aside with.
     await sync({ quarantine: quarantine(0) });
+    expect(fs.existsSync(recent.to)).toBe(true);
+    await sync({ quarantine: quarantine(), ttl: { now: recent.expiresAt + 1 } });
     expect(fs.existsSync(recent.to)).toBe(false);
   }, 120_000);
 

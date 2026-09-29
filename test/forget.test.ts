@@ -307,9 +307,10 @@ describe('forget with a quarantine', () => {
     expect(fs.existsSync(copy)).toBe(false);
     expect(readForgotten(forgottenPath).has('s-1')).toBe(true);
     const said = describeForget(result);
-    expect(said).toContain('Set aside now: its Cowork record, 2 entries. It is hidden from search and read from this moment, and kept for 7 days');
-    expect(said).toContain('so that a forget the user did not mean can be undone. After 7 days a sync deletes it for good.');
-    expect(said).toContain(`To undo it within 7 days: delete the line s-1 from ${forgottenPath}, then move the file back to ${file}.`);
+    const until = new Date(result.setAside[0].expiresAt).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    expect(said).toContain(`Set aside now: its Cowork record, 2 entries. It is hidden from search and read from this moment, and kept for 7 days, until ${until} (${to})`);
+    expect(said).toContain('so that a forget the user did not mean can be undone. After that a sync deletes it for good.');
+    expect(said).toContain(`To undo it before then: delete the line s-1 from ${forgottenPath}, then move ${to} back to ${file}.`);
     expect(said).toContain('Removed now: the archive copy starmemory kept of it, with any summary.');
     expect(said).not.toContain('Removed now: its Cowork record');
     expect(said).not.toContain('Nothing was stored');

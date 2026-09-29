@@ -257,7 +257,8 @@ describe('a server that serves Cowork records only', () => {
       { timestamp: '2026-09-28T10:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'zeppelin lantern question from Codex' }] } },
       { timestamp: '2026-09-28T10:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'a private Codex answer' }] } },
     ]);
-    // Set aside by a forget long ago: the full sync's purge deletes it.
+    // Set aside by a forget long ago, under a name without its expiry: the
+    // full sync's purge goes by its mtime and deletes it.
     fs.mkdirSync(path.dirname(oldSetAside()), { recursive: true });
     fs.writeFileSync(oldSetAside(), '{}\n');
     const then = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -375,8 +376,9 @@ describe('a server that serves Cowork records only', () => {
     expect(forgotten.isError).toBe(false);
     expect(forgotten.text).toContain('Set aside now: its Cowork record, 1 entry.');
     expect(forgotten.text).toContain('kept for 7 days');
-    expect(forgotten.text).toContain('To undo it within 7 days');
+    expect(forgotten.text).toContain('To undo it before then');
     const [setAside] = fs.readdirSync(path.join(quarantineRoot(), 'lanterns')).filter((name) => name.startsWith(coworkId));
+    expect(setAside).toMatch(new RegExp(`^${coworkId}\\.\\d+-[0-9a-f]{8}\\.jsonl\\.forgotten$`));
     const file = path.join(quarantineRoot(), 'lanterns', setAside);
     expect(fs.readFileSync(file, 'utf8')).toContain('gauge-ok: 3mm');
     if (process.platform !== 'win32') expect(fs.statSync(file).mode & 0o777).toBe(0o600);

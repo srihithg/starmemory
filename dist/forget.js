@@ -214,16 +214,18 @@ export function forget(session, { coworkRoot, forgottenPath, archiveRoot, store,
     };
 }
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const utc = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 /** What the model is told, to pass on to the user in a sentence. */
 export function describeForget(result) {
     const lines = [`Forgot session ${result.session}.`];
     const setAside = result.setAside.length > 0;
     if (setAside) {
-        const days = plural(result.setAsideDays, 'day', 'days');
+        const until = utc(Math.min(...result.setAside.map((m) => m.expiresAt)));
         lines.push(`Set aside now: its Cowork record, ${plural(result.entries, 'entry', 'entries')}. It is hidden from search and read from this moment, ` +
-            `and kept for ${days} (${result.setAside.map((m) => m.to).join(', ')}) so that a forget the user did not mean can be undone. After ${days} a sync deletes it for good.`);
-        lines.push(`To undo it within ${days}: delete the line ${result.session} from ${result.forgottenPath}, then move the file back to ` +
-            `${result.setAside.map((m) => m.from).join(', ')}.`);
+            `and kept for ${plural(result.setAsideDays, 'day', 'days')}, until ${until} (${result.setAside.map((m) => m.to).join(', ')}), ` +
+            'so that a forget the user did not mean can be undone. After that a sync deletes it for good.');
+        lines.push(`To undo it before then: delete the line ${result.session} from ${result.forgottenPath}, then move ` +
+            `${result.setAside.map((m) => `${m.to} back to ${m.from}`).join(', and ')}.`);
     }
     const removed = [
         ...(result.records.length > 0 && !setAside ? [`its Cowork record, ${plural(result.entries, 'entry', 'entries')} (${result.records.join(', ')})`] : []),
