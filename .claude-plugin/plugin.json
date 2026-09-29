@@ -1,7 +1,7 @@
 {
   "name": "starmemory",
   "version": "0.3.0",
-  "description": "Hybrid recall for Claude Code and Codex conversations: Tantivy BM25 + usearch HNSW over LMDB, fused by reciprocal rank. One shared memory for both harnesses. Finds Chinese conversations the English-only embedding model cannot.",
+  "description": "Hybrid recall for Claude Code, Codex and Cowork conversations: Tantivy BM25 + usearch HNSW over LMDB, fused by reciprocal rank. One shared memory for all three. Finds Chinese conversations the English-only embedding model cannot.",
   "license": "Apache-2.0",
   "keywords": [
     "memory",

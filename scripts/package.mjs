@@ -46,3 +46,6 @@ console.log(`  claude plugin marketplace add ${stageDir}`);
 console.log(`  claude plugin install starmemory -y`);
 console.log('or, without installing:');
 console.log(`  claude --plugin-dir ${zipPath}`);
+console.log('');
+console.log('For Cowork, also upload the zip as a plugin from Cowork\'s Customize menu in the Claude app.');
+console.log('It brings the skill and the start-up hook, and Cowork records nothing without them.');

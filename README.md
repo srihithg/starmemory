@@ -85,20 +85,35 @@ there. starmemory works with both facts:
 
 ### Install
 
-On the Mac where the Claude app runs, with Node 22 or newer and Claude Code,
-paste this into Terminal. It is also the whole install for a colleague:
+Cowork needs two installs, one on your Mac and one in Cowork, and it records
+nothing until both are done. They are also the whole install for a colleague.
 
-```
-claude plugin marketplace add albericliu0/starmemory && claude plugin install starmemory && node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
-```
+1. **On the Mac: the server.** On the Mac where the Claude app runs, with
+   Node 22 or newer and Claude Code, paste this into Terminal:
 
-It installs the plugin in Claude Code and its dependencies, adds the server to
-the app's `claude_desktop_config.json` (backed up first, every other server
-left as it was, only server names printed), and quits and reopens the Claude
-app. Then add the plugin in Cowork too, from the Customize menu, pointing it at
-this repository or uploading the zip `npm run package` builds, so the skill and
-the start-up hook reach Cowork sessions. The first time a session finds the
-tools missing, the skill offers this setup once and remembers the answer.
+   ```
+   claude plugin marketplace add albericliu0/starmemory && claude plugin install starmemory && node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
+   ```
+
+   It installs the plugin in Claude Code and its dependencies, adds the server
+   to the app's `claude_desktop_config.json` (backed up first, every other
+   server left as it was, only server names printed), and quits and reopens
+   the Claude app. If you set `CLAUDE_CONFIG_DIR`, Claude Code keeps its
+   plugins there, so the path in the command becomes
+   `$CLAUDE_CONFIG_DIR/plugins/marketplaces/starmemory/cli/starmemory.mjs`.
+
+2. **In Cowork: the plugin.** In the Claude app, open Cowork's Customize menu
+   and add the starmemory plugin, pointing it at this repository
+   (`albericliu0/starmemory`) or uploading the zip `npm run package` builds.
+   This brings the skill and the start-up hook. Without them no Cowork session
+   loads the skill or gets a session key, so nothing is recorded even though
+   step 1 made the tools available. Nothing can remind you of this step from
+   inside Cowork, because this step is what brings the reminder.
+
+Once both are done, a session that finds the tools missing says in one line
+that memory is out of reach, since the Mac may just be asleep or the app
+closed. It offers step 1 only when it looks never done, once, and remembers
+the answer.
 
 About `desktop-install`:
 
@@ -123,7 +138,8 @@ About `desktop-install`:
   newest copy of starmemory Claude Code has installed from the same
   marketplace, so plugin updates reach Cowork without running `desktop-install`
   again. It prefers a copy whose dependencies are already installed, even an
-  older one, so the app does not wait on npm install.
+  older one, so the app does not wait on npm install. After `claude plugin
+  update starmemory`, quit and reopen the Claude app so it starts the new copy.
 - `STARMEMORY_*` settings, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` set in the
   shell that runs it are copied into the app's entry, so the app's server and
   Claude Code's share one store. Run it again after changing them.

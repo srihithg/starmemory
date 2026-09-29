@@ -89,17 +89,30 @@ is the id at the end of that file name.
 ## When the tools are missing, in Cowork
 
 The server runs on the user's Mac, registered with the Claude desktop app, which serves it to the
-Cowork sessions linked to that computer. When the four tools are not in this session, offer to set
-it up, once, and remember the answer:
+Cowork sessions linked to that computer. People use Cowork away from that Mac too, so when the four
+tools are not in this session, the likeliest reason is that the Mac cannot be reached right now,
+not that starmemory was never set up. Offer the setup only when it really looks never done, once,
+and remember the answer:
 
-1. **Check whether it was offered before**, in whatever persistent memory this session has, such
-   as a memory file or tool, by looking for a note about starmemory. If it records a no, do not
-   offer again unless the user brings it up. If it records a yes, the setup did not finish or the app
-   was not restarted. If `get_device_info` is available, its `localMcpServers` lists each local
-   server with its state and any error. Say what you found in one line, then give the fix itself.
-2. **Otherwise offer, at the end of your first reply**, after answering what they asked, in your
-   own words: "One more thing: starmemory isn't connected to this app yet, so I can't search or
-   record our past sessions. Setting it up is one command in Terminal on your Mac. Want it?"
+1. **Check what is known**, in whatever persistent memory this session has, such as a memory file
+   or tool, by looking for a note about starmemory. If `get_device_info` is available, its
+   `localMcpServers` lists each local server on the linked computer with its state and any error.
+   The server is `starmem` unless the user chose another name.
+   - If a note records a no, do not offer again unless the user brings it up.
+   - If the server is listed with an error, say what you found in one line, then give the fix
+     itself.
+   - If `localMcpServers` comes back without the server and a note records a yes, the setup did not
+     finish or the app was not restarted. Say so in one line and give the command in step 4 again.
+   - Otherwise, if the user has set it up before or it looks set up, say once, in one line, that
+     memory isn't reachable right now, because the Mac may be asleep, the Claude app closed, or this
+     session not linked to that computer. Then carry on with what the session is about. This skill
+     being here means the plugin was added to Cowork, the second half of the install, so it looks
+     set up unless something shows otherwise.
+2. **Offer only when it really looks never done**, which is when `localMcpServers` comes back
+   without the server and no note records an answer, or when the user says it was never set up.
+   Offer at the end of your first reply, after answering what they asked, in your own words: "One
+   more thing: starmemory isn't connected to this app yet, so I can't search or record our past
+   sessions. Setting it up is one command in Terminal on your Mac. Want it?"
 3. **Record the answer** in that memory as soon as they give it, with the date, for example
    `2026-09-28: starmemory setup offered, answer: yes`. Without a persistent memory, just do not ask
    again in this session.
@@ -130,6 +143,15 @@ In Claude Code on that Mac you can run the registration yourself, after asking, 
 reopens the Claude app: `node <this skill's folder>/../../cli/starmemory.mjs desktop-install
 --restart`. When this Claude Code session runs inside the Claude app itself, it refuses, because
 quitting the app would end this session; give the user the command to run in Terminal instead.
+
+## When only search and read are there, in Cowork
+
+If `search` and `read` are in this session but `remember` and `forget` are not, the Mac is running
+a copy of starmemory older than 0.4.0, from before those two tools. Keep searching as usual. At the
+end of your first reply, tell the user once that this session can't be recorded until that Mac is
+updated, and give the fix: run `claude plugin update starmemory` in Terminal on that Mac, then quit
+and reopen the Claude app. If the user asks not to record this session, tell them nothing is being
+recorded anyway, because `remember` isn't available here.
 
 ## What this cannot do
 
