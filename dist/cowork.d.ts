@@ -206,12 +206,13 @@ export interface SweptAside {
  * project folder deep, and only at files aside for longer than
  * ASIDE_SWEEP_MS by the time in their name. A record is put back (putBack)
  * when its path is free and its session is not forgotten (`isForgotten`,
- * given the record's path). A forgotten session's is set aside in the
- * quarantine, under the name quarantineRecord gives it, or deleted when the
- * quarantine keeps nothing, at 0 days or when none was named. Any other,
- * whose path a new record has, is deleted. A set-aside record taken aside by
- * the purge is put back under its own name, to wait out its time as before,
- * or deleted if that name is taken. */
+ * given the record's path). Any other, a forgotten session's or one whose
+ * path a new record has, is set aside in the quarantine under the name
+ * quarantineRecord gives it, so an entry written into it late can still be
+ * recovered, or deleted when the quarantine keeps nothing, at 0 days or when
+ * none was named. A set-aside record taken aside by the purge is put back
+ * under its own name, to wait out its time as before, or deleted if that
+ * name is taken. */
 export declare function sweepAsides({ coworkRoot, quarantine, isForgotten, now, }: {
     coworkRoot: string;
     quarantine?: Quarantine;

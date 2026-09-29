@@ -447,13 +447,26 @@ describe('what a removal left aside', () => {
     expect(fs.existsSync(other)).toBe(false);
   });
 
-  it('is deleted when a new record has its path and its session is not forgotten', () => {
+  it('is set aside in the quarantine when a new record has its path, so a late entry in it can be recovered, and deleted where the quarantine keeps nothing', () => {
     const { file } = remember(root, entry());
+    remember(root, entry({ found: 'a late entry' }));
     const aside = leaveAside(file);
     remember(root, entry({ found: 'a new record at the path' }));
 
-    expect(sweep()).toEqual([{ aside }]);
-    expect({ aside: fs.existsSync(aside), entries: countEntries(file) }).toEqual({ aside: false, entries: 1 });
+    const [swept, ...more] = sweep();
+    expect({ swept, more }).toEqual({ swept: { aside, to: expect.stringMatching(new RegExp(`\\${QUARANTINE_SUFFIX}$`)) }, more: [] });
+    expect(findSetAside(quarantine().root, entry().session)).toEqual([swept.to]);
+    expect({
+      late: fs.readFileSync(swept.to!, 'utf8').includes('a late entry'),
+      entries: countEntries(swept.to!),
+      expiry: setAsideExpiry(path.basename(swept.to!)),
+      atPath: countEntries(file),
+    }).toEqual({ late: true, entries: 2, expiry: now + 7 * 24 * 60 * 60 * 1000, atPath: 1 });
+
+    const again = leaveAside(file);
+    remember(root, entry({ found: 'another new record at the path' }));
+    expect(sweep([], { ...quarantine(), days: 0 })).toEqual([{ aside: again }]);
+    expect({ aside: fs.existsSync(again), entries: countEntries(file) }).toEqual({ aside: false, entries: 1 });
   });
 
   it('in the quarantine, is put back under its set-aside name to wait out its time, and is looked for only when the quarantine is named', () => {

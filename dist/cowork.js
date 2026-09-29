@@ -606,12 +606,13 @@ function isFolder(dir) {
  * project folder deep, and only at files aside for longer than
  * ASIDE_SWEEP_MS by the time in their name. A record is put back (putBack)
  * when its path is free and its session is not forgotten (`isForgotten`,
- * given the record's path). A forgotten session's is set aside in the
- * quarantine, under the name quarantineRecord gives it, or deleted when the
- * quarantine keeps nothing, at 0 days or when none was named. Any other,
- * whose path a new record has, is deleted. A set-aside record taken aside by
- * the purge is put back under its own name, to wait out its time as before,
- * or deleted if that name is taken. */
+ * given the record's path). Any other, a forgotten session's or one whose
+ * path a new record has, is set aside in the quarantine under the name
+ * quarantineRecord gives it, so an entry written into it late can still be
+ * recovered, or deleted when the quarantine keeps nothing, at 0 days or when
+ * none was named. A set-aside record taken aside by the purge is put back
+ * under its own name, to wait out its time as before, or deleted if that
+ * name is taken. */
 export function sweepAsides({ coworkRoot, quarantine, isForgotten, now = Date.now(), }) {
     const swept = [];
     const roots = [
@@ -633,9 +634,12 @@ export function sweepAsides({ coworkRoot, quarantine, isForgotten, now = Date.no
                     if (!fs.lstatSync(aside).isFile())
                         continue;
                     let to;
-                    if (suffix === QUARANTINE_SUFFIX || !isForgotten(original)) {
+                    if (suffix === QUARANTINE_SUFFIX) {
                         if (putBack(aside, original))
                             to = original;
+                    }
+                    else if (!isForgotten(original) && putBack(aside, original)) {
+                        to = original;
                     }
                     else if (quarantine && quarantine.days > 0) {
                         to = quarantineRecord(original, quarantine, new Date(now), aside).to;
