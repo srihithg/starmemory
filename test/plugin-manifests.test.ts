@@ -92,15 +92,39 @@ describe('the starmemory skill', () => {
     expect(text()).toContain(`\`${DEFAULT_SERVER_NAME}\``);
   });
 
+  const section = (heading: string) => text().split(`\n## ${heading}\n`)[1]?.split('\n## ')[0] ?? '';
+  const command = (s: string) => s.match(/^\s*(claude plugin marketplace add \S+ && .* desktop-install --restart)$/m)?.[1];
+
   it('gives the same install command as the README', () => {
-    const command = (s: string) => s.match(/^\s*(claude plugin marketplace add .* desktop-install --restart)$/m)?.[1];
     const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
     expect(command(text())).toBeDefined();
     expect(command(text())).toBe(command(readme));
   });
 
+  // `marketplace add` and `install` exit 0 without changing anything when they
+  // find an earlier install, so only the two updates bring that one forward.
+  it('gives an install command that also upgrades, from wherever Claude Code keeps its plugins', () => {
+    const marketplace = read('.claude-plugin/marketplace.json').name;
+    const plugin = read('.claude-plugin/plugin.json').name;
+    expect(command(text())?.split(' && ')).toEqual([
+      'claude plugin marketplace add albericliu0/starmemory',
+      `claude plugin marketplace update ${marketplace}`,
+      `claude plugin install ${plugin}`,
+      `claude plugin update ${plugin}`,
+      `node "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/${marketplace}/cli/starmemory.mjs" desktop-install --restart`,
+    ]);
+    expect(text()).not.toContain('~/.claude/');
+  });
+
+  it('counts a server under the name installs had before the rename, which desktop-install replaces', () => {
+    const check = section('When the tools are missing, in Cowork');
+    expect(check).toContain('`starmem`');
+    expect(check).toContain(`replaces it with \`${DEFAULT_SERVER_NAME}\``);
+  });
+
   it('tells a session that has search and read but not remember and forget how to update the Mac', () => {
-    expect(text()).toContain('claude plugin update starmemory');
+    const older = section('When only search and read are there, in Cowork');
+    expect(older).toContain('the command in step 4');
   });
 });
 

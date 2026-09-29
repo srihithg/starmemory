@@ -92,15 +92,16 @@ nothing until both are done. They are also the whole install for a colleague.
    Node 22 or newer and Claude Code, paste this into Terminal:
 
    ```
-   claude plugin marketplace add albericliu0/starmemory && claude plugin install starmemory && node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
+   claude plugin marketplace add albericliu0/starmemory && claude plugin marketplace update starmemory && claude plugin install starmemory && claude plugin update starmemory && node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/starmemory/cli/starmemory.mjs" desktop-install --restart
    ```
 
    It installs the plugin in Claude Code and its dependencies, adds the server
    to the app's `claude_desktop_config.json` (backed up first, every other
    server left as it was, only server names printed), and quits and reopens
-   the Claude app. If you set `CLAUDE_CONFIG_DIR`, Claude Code keeps its
-   plugins there, so the path in the command becomes
-   `$CLAUDE_CONFIG_DIR/plugins/marketplaces/starmemory/cli/starmemory.mjs`.
+   the Claude app. Where starmemory is already installed, it updates it first,
+   so running it again is also how to upgrade. The path follows
+   `CLAUDE_CONFIG_DIR` when you set it, since Claude Code keeps its plugins
+   there.
 
 2. **In Cowork: the plugin.** In the Claude app, open Cowork's Customize menu
    and add the starmemory plugin, pointing it at this repository
@@ -125,9 +126,11 @@ About `desktop-install`:
 - Run it in Terminal. From a session inside the Claude app, such as Claude
   Code in the app's Code tab, it refuses and changes nothing, because it would
   have to quit the app that session runs in.
-- The server is named `starmemserver`. The app refuses a local server whose name
-  collides with one it reserves for its own tools, and it does not publish the
-  list; it refused `cowork-episodic-memory`. If it reports a collision, run
+- The server is named `starmemserver`. Installs from before the rename named it
+  `starmem`, and running `desktop-install` again replaces that entry with
+  `starmemserver`. The app refuses a local server whose name collides with one
+  it reserves for its own tools, and it does not publish the list; it refused
+  `cowork-episodic-memory`. If it reports a collision, run
   `desktop-install --name <another name>`, which also removes the refused entry.
   A name another server in the config already has is refused rather than
   overwritten, unless you add `--replace`.

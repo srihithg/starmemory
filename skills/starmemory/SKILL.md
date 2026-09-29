@@ -97,7 +97,9 @@ and remember the answer:
 1. **Check what is known**, in whatever persistent memory this session has, such as a memory file
    or tool, by looking for a note about starmemory. If `get_device_info` is available, its
    `localMcpServers` lists each local server on the linked computer with its state and any error.
-   The server is `starmemserver` unless the user chose another name.
+   The server is `starmemserver` unless the user chose another name. An entry named `starmem` is
+   the same server, under the name it had in installs from before the rename, so count it as the
+   server. Running the command in step 4 again replaces it with `starmemserver`.
    - If a note records a no, do not offer again unless the user brings it up.
    - If the server is listed with an error, say what you found in one line, then give the fix
      itself.
@@ -120,14 +122,14 @@ and remember the answer:
    needs Node 22 or newer and Claude Code:
 
    ```
-   claude plugin marketplace add albericliu0/starmemory && claude plugin install starmemory && node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
+   claude plugin marketplace add albericliu0/starmemory && claude plugin marketplace update starmemory && claude plugin install starmemory && claude plugin update starmemory && node "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/marketplaces/starmemory/cli/starmemory.mjs" desktop-install --restart
    ```
 
-   It installs starmemory into Claude Code, registers its server with the Claude app as
-   `starmemserver`, and quits and reopens the app. Give it to them to paste. Do not run it yourself,
-   even with a tool that runs commands on their computer. That tool goes through the Claude app, and
-   from inside the app the command refuses, because it would have to quit the app it runs in.
-   Without Claude Code, this does the same from a clone:
+   It installs starmemory into Claude Code, or updates it where it is already installed, registers
+   its server with the Claude app as `starmemserver`, and quits and reopens the app. Give it to them
+   to paste. Do not run it yourself, even with a tool that runs commands on their computer. That
+   tool goes through the Claude app, and from inside the app the command refuses, because it would
+   have to quit the app it runs in. Without Claude Code, this does the same from a clone:
    `git clone https://github.com/albericliu0/starmemory ~/starmemory && node ~/starmemory/cli/starmemory.mjs desktop-install --restart`
 5. **If the app says the name collides with a reserved internal server name**, have them run the
    `node ... desktop-install --restart` part again with `--name <another name>` added, for example
@@ -149,9 +151,10 @@ quitting the app would end this session; give the user the command to run in Ter
 If `search` and `read` are in this session but `remember` and `forget` are not, the Mac is running
 a copy of starmemory older than 0.4.0, from before those two tools. Keep searching as usual. At the
 end of your first reply, tell the user once that this session can't be recorded until that Mac is
-updated, and give the fix: run `claude plugin update starmemory` in Terminal on that Mac, then quit
-and reopen the Claude app. If the user asks not to record this session, tell them nothing is being
-recorded anyway, because `remember` isn't available here.
+updated, and give the fix: the command in step 4 of the section above, pasted into Terminal on that
+Mac. On a Mac that already has starmemory, it updates it, then quits and reopens the Claude app. If
+the user asks not to record this session, tell them nothing is being recorded anyway, because
+`remember` isn't available here.
 
 ## What this cannot do
 
