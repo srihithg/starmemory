@@ -428,4 +428,40 @@ describe('the launcher the Claude app runs', () => {
       fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
+
+  it('serves Cowork records only from a launcher copied before it set the scope, and every harness to Claude Code', () => {
+    // Not resolved: the server compares both paths through their links.
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'starmemory-launch-old-'));
+    try {
+      // This plugin's entry point, with a bootstrap that says which scope it
+      // would hand the server.
+      const copy = path.join(base, 'plugin');
+      fs.mkdirSync(path.join(copy, 'cli'), { recursive: true });
+      fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ name: 'starmemory', version: '9.9.9' }));
+      fs.copyFileSync(path.join(root, 'cli', 'mcp-server.mjs'), path.join(copy, 'cli', 'mcp-server.mjs'));
+      fs.writeFileSync(
+        path.join(copy, 'cli', 'bootstrap.mjs'),
+        "export async function ensureReady() { return true; }\nexport function handOff() { process.stdout.write(process.env.STARMEMORY_SCOPE ?? 'unset'); }\n"
+      );
+      // The launcher as desktop-install copied it before it set the scope.
+      const current = fs.readFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), 'utf8');
+      const older = current.replace(/^.*STARMEMORY_SCOPE \?\?=.*\n/m, '');
+      expect(older).not.toBe(current);
+      const desktop = path.join(base, '.config', 'starmemory', 'desktop');
+      fs.mkdirSync(desktop, { recursive: true });
+      fs.writeFileSync(path.join(desktop, 'launch.mjs'), older);
+      fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ root: copy, follow: false }));
+      const run = (script: string, extra: Record<string, string> = {}) => {
+        const env: Record<string, string> = { PATH: process.env.PATH ?? '', HOME: base, ...extra };
+        return spawnSync(process.execPath, [script], { env, encoding: 'utf8', timeout: 20_000 }).stdout;
+      };
+
+      expect(run(path.join(fs.realpathSync(desktop), 'launch.mjs'))).toBe('cowork');
+      expect(run(path.join(desktop, 'launch.mjs'), { STARMEMORY_SCOPE: 'all' })).toBe('all');
+      // Claude Code and Codex start the entry point itself.
+      expect(run(path.join(copy, 'cli', 'mcp-server.mjs'))).toBe('unset');
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
 });
