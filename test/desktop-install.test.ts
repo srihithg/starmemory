@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 // @ts-expect-error -- plain JS module, no type declarations by design
@@ -240,6 +240,33 @@ describe('desktop-install', () => {
   });
 });
 
+describe('telling whether the Claude app is running', () => {
+  const installModule = pathToFileURL(path.join(root, 'cli', 'desktop-install.mjs')).href;
+
+  /** claudeAppRunning('darwin'), with a pgrep on PATH that exits as macOS's
+   * does from a session the app runs: the app is an ancestor there, so only
+   * `-a` finds it. */
+  function appRunningWithPgrep(status: number) {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'pgrep'), `#!/bin/sh\n[ "$*" = "-a -x Claude" ] && exit ${status}\nexit 1\n`, { mode: 0o755 });
+    const script = `import { claudeAppRunning } from ${JSON.stringify(installModule)}; process.stdout.write(String(claudeAppRunning('darwin')));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...env, PATH: `${bin}${path.delimiter}${env.PATH}` }, encoding: 'utf8' });
+    return r.stdout;
+  }
+
+  it('counts the app among pgrep\'s ancestors, which pgrep leaves out by default', () => {
+    if (process.platform === 'win32') return; // the fake pgrep is a shell script
+    expect(appRunningWithPgrep(0)).toBe('true');
+    expect(appRunningWithPgrep(1)).toBe('false');
+  });
+
+  it('cannot tell when pgrep itself fails', () => {
+    if (process.platform === 'win32') return;
+    expect(appRunningWithPgrep(3)).toBe('undefined');
+  });
+});
+
 describe('desktop-install while the Claude app is running', () => {
   const quiet = { out: () => {}, err: () => {} };
 
@@ -298,6 +325,118 @@ describe('desktop-install while the Claude app is running', () => {
     expect(code).toBe(1);
     expect(quit).toBe(false);
     expect(readConfig()).toEqual(existingConfig);
+  });
+
+  it('refuses --restart from inside the app whatever it can tell of the app, and touches nothing', async () => {
+    writeConfig(existingConfig);
+
+    for (const answer of [false, undefined]) {
+      const events: string[] = [];
+      const said: string[] = [];
+      const code = await main(['--restart', '--no-prepare', '--config', configFile], {
+        env: { ...env, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' },
+        platform: 'darwin',
+        appRunning: () => answer,
+        appConfig: configFile,
+        quitApp: () => { events.push('quit'); return true; },
+        openApp: () => { events.push('open'); return true; },
+        out: () => {},
+        err: (l: string) => said.push(l),
+      });
+
+      expect(code).toBe(1);
+      expect(events).toEqual([]);
+      expect(said.join('\n')).toContain('Run the same command in Terminal instead');
+      expect(readConfig()).toEqual(existingConfig);
+      expect(fs.existsSync(launcherDir(env))).toBe(false);
+    }
+  });
+
+  it('without --restart, from inside the running app, says to run it in Terminal', async () => {
+    writeConfig(existingConfig);
+    const said: string[] = [];
+
+    const code = await main(['--no-prepare', '--config', configFile], {
+      env: { ...env, CLAUDE_CODE_ENTRYPOINT: 'claude-desktop' },
+      platform: 'darwin',
+      appRunning: () => true,
+      appConfig: configFile,
+      out: () => {},
+      err: (l: string) => said.push(l),
+    });
+
+    expect(code).toBe(1);
+    expect(said.join('\n')).toContain('Run the same command in Terminal instead');
+    expect(said.join('\n')).not.toContain('add --restart');
+    expect(readConfig()).toEqual(existingConfig);
+  });
+
+  it('looks again just before writing, after preparing the copy, and changes nothing if the app was opened meanwhile', async () => {
+    writeConfig(existingConfig);
+    const events: string[] = [];
+    const said: string[] = [];
+
+    const code = await main(['--config', configFile], {
+      ...quiet,
+      env,
+      appRunning: () => { events.push('look'); return events.length > 1; },
+      appConfig: configFile,
+      prepare: async () => { events.push('prepare'); return true; },
+      err: (l: string) => said.push(l),
+    });
+
+    expect(code).toBe(1);
+    expect(events).toEqual(['look', 'prepare', 'look']);
+    expect(said.join('\n')).toContain('the Claude app is running now');
+    expect(said.join('\n')).toContain('nothing was changed');
+    expect(readConfig()).toEqual(existingConfig);
+    expect(backups()).toEqual([]);
+    // Nor is the launcher rewritten when this refuses.
+    expect(fs.existsSync(launcherDir(env))).toBe(false);
+  });
+
+  it('with --restart, neither quits nor opens an app it did not see running, and does not say it reopened it', async () => {
+    for (const answer of [false, undefined]) {
+      writeConfig(existingConfig);
+      const events: string[] = [];
+      const said: string[] = [];
+
+      const code = await main(['--restart', '--no-prepare', '--config', configFile], {
+        env,
+        platform: 'darwin',
+        appRunning: () => answer,
+        appConfig: configFile,
+        quitApp: () => { events.push('quit'); return true; },
+        openApp: () => { events.push('open'); return true; },
+        out: (l: string) => said.push(l),
+        err: (l: string) => said.push(l),
+      });
+
+      expect(code).toBe(0);
+      expect(events).toEqual([]);
+      expect(said.join('\n')).not.toContain('Reopened');
+      expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+    }
+  });
+
+  it('with --restart, says to open the app when it quit it and could not open it again', async () => {
+    writeConfig(existingConfig);
+    const said: string[] = [];
+
+    const code = await main(['--restart', '--no-prepare', '--config', configFile], {
+      env,
+      platform: 'darwin',
+      appRunning: () => true,
+      appConfig: configFile,
+      quitApp: () => true,
+      openApp: () => false,
+      out: (l: string) => said.push(l),
+      err: () => {},
+    });
+
+    expect(code).toBe(0);
+    expect(said).toContain('Next: open the Claude app again.');
+    expect(said.join('\n')).not.toContain('Reopened');
   });
 
   it('knows the app\'s own config by another name, through a link', async () => {

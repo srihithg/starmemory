@@ -252,8 +252,11 @@ const WINDOWS_APP_PROCESS =
 /** true or false, or undefined where this cannot tell. */
 export function claudeAppRunning(platform = process.platform) {
   if (platform === 'darwin') {
-    const r = spawnSync('pgrep', ['-x', 'Claude'], { stdio: 'ignore' });
-    return r.error ? undefined : r.status === 0;
+    // -a: pgrep leaves out its own ancestors otherwise, and from a session the
+    // app runs, the app is one of them.
+    const r = spawnSync('pgrep', ['-a', '-x', 'Claude'], { stdio: 'ignore' });
+    // 0 is a match and 1 none. Anything else is pgrep failing.
+    return r.error || (r.status !== 0 && r.status !== 1) ? undefined : r.status === 0;
   }
   if (platform === 'win32') {
     const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_APP_PROCESS], {
@@ -311,8 +314,8 @@ function openClaudeApp() {
   return spawnSync('open', ['-a', 'Claude'], { stdio: 'ignore' }).status === 0;
 }
 
-/** The node the app will get: the shim run the way the app runs it, with a bare
- * PATH, asked for its version. */
+/** The node the app will get: the shim in `dir` run the way the app runs it,
+ * with a bare PATH, asked for its version. */
 export function nodeTheAppFinds(dir, { env = process.env, platform = process.platform } = {}) {
   if (platform === 'win32') return { version: process.version, path: process.execPath };
   const r = spawnSync('/bin/sh', [path.join(dir, 'run-node.sh'), '-e', 'process.stdout.write(process.version + " " + process.execPath)'], {
@@ -382,9 +385,17 @@ export async function main(argv, deps = {}) {
     return 1;
   }
 
+  const inside = insideClaudeApp(env);
+  const insideRefusal =
+    "starmemory: this runs inside the Claude app. It changes the app's config only while the app is closed, and quitting the app would end this session, so nothing was changed. Run the same command in Terminal instead.";
+  if (inside && opts.restart) {
+    err(insideRefusal);
+    return 1;
+  }
   // Only the app's own config can be overwritten by the running app; a file
   // named with --config elsewhere, a test's for one, is not its to touch.
-  const running = sameFile(configFile, appConfig, platform) ? appRunning() : false;
+  const appsOwn = sameFile(configFile, appConfig, platform);
+  const running = appsOwn ? appRunning() : false;
   if (running === undefined && (platform === 'darwin' || platform === 'win32')) {
     err(
       'starmemory: could not tell whether the Claude app is running' +
@@ -392,15 +403,15 @@ export async function main(argv, deps = {}) {
         '. If it is, quit it and run this again: it can overwrite a config changed while it is open.'
     );
   }
-  if (running && opts.restart && insideClaudeApp(env)) {
-    err('starmemory: this runs inside the Claude app, and quitting the app would end this session. Run the same command in Terminal instead.');
-    return 1;
-  }
   if (running && opts.restart && platform !== 'darwin') {
     err('starmemory: --restart works on macOS only. Quit the Claude app from the system tray, run this again without --restart, then open the app.');
     return 1;
   }
   if (running && !opts.restart) {
+    if (inside) {
+      err(insideRefusal);
+      return 1;
+    }
     err('starmemory: the Claude app is running, and it can overwrite changes made to its config while it is open, so nothing was changed.');
     err('Quit it (Cmd+Q on a Mac) and run this again, or add --restart to have this quit the app, make the change and open it again.');
     return 1;
@@ -408,9 +419,9 @@ export async function main(argv, deps = {}) {
 
   const root = path.resolve(here, '..');
   const launch = launchConfig({ root, pluginsDir: pluginsDirOf(env) });
-  const launcher = installLauncher(dir, launch);
   const serverRoot = resolvePluginRoot(launch);
-  const node = nodeTheAppFinds(dir, { env, platform });
+  // The shim beside this file, which is the one installLauncher copies.
+  const node = nodeTheAppFinds(here, { env, platform });
 
   if (opts.prepare && serverRoot) {
     const ready = await prepare(serverRoot);
@@ -449,16 +460,24 @@ export async function main(argv, deps = {}) {
       err(`starmemory: ${error.message}`);
       return 1;
     }
-    const taken = opts.replace ? undefined : nameTaken(current.config, opts.name, launcher);
+    const taken = opts.replace ? undefined : nameTaken(current.config, opts.name, launcherPath);
     if (taken) {
       err(`starmemory: ${taken}`);
       return 1;
     }
+    // The first look came before preparing the copy, which can take minutes.
+    // Having quit the app itself, this saw it gone a moment ago.
+    if (appsOwn && !quit && appRunning() === true) {
+      err('starmemory: the Claude app is running now, and it can overwrite changes made to its config while it is open, so nothing was changed.');
+      err(opts.restart ? 'Run this again.' : 'Quit it and run this again, or add --restart to have this quit the app, make the change and open it again.');
+      return 1;
+    }
+    const launcher = installLauncher(dir, launch);
     const entry = serverEntry({ dir, env, platform });
     const { config, replaced } = withServer(current.config, opts.name, entry, launcher);
     const backup = current.exists ? backupConfig(configFile, now) : undefined;
     writeConfig(configFile, config);
-    const reopened = opts.restart && platform === 'darwin' ? reopen() : false;
+    const reopened = quit ? reopen() : false;
 
     out(`starmemory: registered "${opts.name}" with the Claude desktop app.`);
     out(`  config    ${configFile}`);
@@ -473,7 +492,7 @@ export async function main(argv, deps = {}) {
     if (replaced.length > 0) out(`  replaced  the earlier entry ${replaced.map((n) => `"${n}"`).join(', ')}`);
     out(`  servers   ${Object.keys(config.mcpServers).join(', ')}`);
     out('');
-    out(reopened ? 'Reopened the Claude app.' : 'Next: quit the Claude app completely and open it again.');
+    out(reopened ? 'Reopened the Claude app.' : quit ? 'Next: open the Claude app again.' : 'Next: quit the Claude app completely and open it again.');
     out(`Cowork sessions linked to this computer then have mcp__remote-devices__${opts.name}__search, read, remember and forget.`);
     out('If the app says the name collides with a reserved internal server name, run this again with --name <another name>.');
     return 0;

@@ -107,6 +107,9 @@ About `desktop-install`:
   macOS only; on Windows, quit the app from the tray first. The config is
   `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS
   and `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
+- Run it in Terminal. From a session inside the Claude app, such as Claude
+  Code in the app's Code tab, it refuses and changes nothing, because it would
+  have to quit the app that session runs in.
 - The server is named `starmem`. The app refuses a local server whose name
   collides with one it reserves for its own tools, and it does not publish the
   list; it refused `cowork-episodic-memory`. If it reports a collision, run

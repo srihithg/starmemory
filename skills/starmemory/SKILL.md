@@ -112,9 +112,9 @@ it up, once, and remember the answer:
 
    It installs starmemory into Claude Code, registers its server with the Claude app as `starmem`,
    and quits and reopens the app. Give it to them to paste. Do not run it yourself, even with a
-   tool that runs commands on their computer: that tool goes through the Claude app, so quitting
-   the app cuts it off before the config is written and the app reopened. Without Claude Code,
-   this does the same from a clone:
+   tool that runs commands on their computer. That tool goes through the Claude app, and from
+   inside the app the command refuses, because it would have to quit the app it runs in. Without
+   Claude Code, this does the same from a clone:
    `git clone https://github.com/albericliu0/starmemory ~/starmemory && node ~/starmemory/cli/starmemory.mjs desktop-install --restart`
 5. **If the app says the name collides with a reserved internal server name**, have them run the
    `node ... desktop-install --restart` part again with `--name <another name>` added, for example
