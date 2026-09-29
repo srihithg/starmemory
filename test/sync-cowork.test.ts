@@ -268,7 +268,10 @@ function holdWriter(textDir: string, ms: number): Promise<{ exited: Promise<numb
     'const t = TextIndex.open(process.argv[1]);' +
     "if (!t.tryAcquireWriter()) process.exit(2);" +
     "process.stdout.write('held\\n');" +
-    `setTimeout(() => process.exit(0), ${ms});`;
+    // The timer refers to the index so it stays alive. Nothing else does
+    // after the lock is taken, and once collected it would let the lock go
+    // before the hold is over.
+    `setTimeout(() => { void t; process.exit(0); }, ${ms});`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, textDir], { stdio: ['ignore', 'pipe', 'inherit'] });
   const exited = new Promise<number | null>((resolve) => child.on('exit', resolve));
   return new Promise((resolve, reject) => {
