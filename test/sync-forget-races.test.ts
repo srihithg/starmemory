@@ -19,10 +19,10 @@ vi.mock('../src/parser.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/parser.js')>();
   return {
     ...actual,
-    parseConversation: async (filePath: string, project: string, archivePath: string) => {
+    parseConversation: async (filePath: string, project: string, archivePath: string, sessions?: Set<string>) => {
       const g = gates.get(filePath);
       if (g && ++g.calls === g.holdCall) await g.hold;
-      return actual.parseConversation(filePath, project, archivePath);
+      return actual.parseConversation(filePath, project, archivePath, sessions);
     },
   };
 });

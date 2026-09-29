@@ -132,11 +132,16 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
             continue;
         }
         const summaryPath = summaryPathFor(c.archivePath);
+        // Asked from here on with the sessions of the copy as it is read now,
+        // which can hold lines the candidate was picked without.
+        let judged = c;
         try {
-            const exchanges = await parseConversation(c.archivePath, c.project, c.archivePath);
+            const sessions = new Set(c.sessions);
+            const exchanges = await parseConversation(c.archivePath, c.project, c.archivePath, sessions);
+            judged = { ...c, sessions: [...sessions] };
+            if (opts.skip?.(judged))
+                continue;
             if (exchanges.length === 0) {
-                if (opts.skip?.(c))
-                    continue;
                 writeSummary(summaryPath, '');
                 result.written++;
                 continue;
@@ -147,7 +152,7 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
                 : await summarizers.claude({ sessionId: c.sessionId, cwd: await recordedCwd(c.archivePath), transcript });
             // Asked again: the model call takes a while, and a session forgotten in
             // the meantime must not get its summary written after all.
-            if (opts.skip?.(c))
+            if (opts.skip?.(judged))
                 continue;
             writeSummary(summaryPath, text);
             result.written++;
@@ -155,7 +160,7 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
         catch (error) {
             // Forgotten while it was being read, its copy removed under it: there is
             // nothing to retry, and a sentinel would outlive the forget.
-            if (opts.skip?.(c) || !fs.existsSync(c.archivePath))
+            if (opts.skip?.(judged) || !fs.existsSync(c.archivePath))
                 continue;
             writeErrorSentinel(summaryPath, error);
             result.failed++;

@@ -34,8 +34,8 @@ import {
   type Quarantine,
   type SetAside,
 } from './cowork.js';
-import { projectFromPath, walkJsonlFiles } from './parser.js';
-import { filterIds, getExchange, syncCursorKey, type StoreHandle } from './store.js';
+import { projectFromPath, sessionsOfName, walkJsonlFiles } from './parser.js';
+import { exchangesFrom, syncCursorKey, type StoreHandle } from './store.js';
 import type { TextIndex } from './text-index.js';
 import { groupByFile, removeConversations, type RemoveResult } from './ttl.js';
 import { HARNESSES, type ConversationExchange, type Harness } from './types.js';
@@ -88,13 +88,31 @@ export function addForgotten(file: string, session: string): void {
   }
 }
 
-function storedRows(store: StoreHandle, session: string): ConversationExchange[] {
-  const rows: ConversationExchange[] = [];
-  for (const id of filterIds(store, { sessionId: session }) ?? []) {
-    const row = getExchange(store, id);
-    if (row) rows.push(row);
-  }
-  return rows;
+/** Whether any of `sessions` is on the forgotten list: the one test that
+ * search, read, the summaries and the sync's archiving, indexing and
+ * deleting all go by. A row is judged by its own session and its file's name
+ * (rowSessions), since a transcript named after one session can carry lines
+ * of the session it was resumed from. A transcript or a copy, whose whole
+ * text is what gets copied, summarised or read, is judged by its name and
+ * every session its lines record (parser.ts, sessionIdsOf): a file holding a
+ * forgotten session's turns is not shown, while another session's rows from
+ * it are kept. */
+export function isForgotten(sessions: Iterable<string | undefined>, list: ReadonlySet<string>): boolean {
+  for (const session of sessions) if (session !== undefined && list.has(session)) return true;
+  return false;
+}
+
+/** The sessions a stored row belongs to, for isForgotten. */
+export function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath'>): (string | undefined)[] {
+  return [row.sessionId, ...sessionsOfName(row.archivePath)];
+}
+
+/** Every stored row that belongs to a session on `list` (rowSessions). The
+ * store indexes rows by session id but not by file, so this walks the rows,
+ * and only when the list is not empty. */
+export function forgottenRows(store: StoreHandle, list: ReadonlySet<string>): ConversationExchange[] {
+  if (list.size === 0) return [];
+  return exchangesFrom(store, 0).filter((row) => isForgotten(rowSessions(row), list));
 }
 
 export interface ForgetResult {
@@ -136,30 +154,21 @@ function listDir(dir: string): string[] {
   }
 }
 
-/** A Codex rollout of `session`, `rollout-<time>-<session>` then `suffix`,
- * matched whole, so a key that is only the tail of another session's id
- * matches nothing. */
-function rolloutName(session: string, suffix: string): RegExp {
-  const escape = (text: string) => text.replace(/\./g, '\\.');
-  return new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-${escape(session)}${escape(suffix)}$`);
-}
-
 /** Archive copies of `session` found by their names, for the ones no row
  * points at: a copy taken before the conversation had a whole exchange, whose
- * source may be gone. A copy is named after its transcript, which is named
- * after its session, or for a Codex rollout ends in it (rolloutName). The
- * whole name counts for a rollout too, since sync goes by it as well. */
+ * source may be gone. A copy is named after its transcript, so it counts
+ * when its name says the session (parser.ts, sessionsOfName), as sync and
+ * the rows go by: the whole name, or for a Codex rollout the id it ends in. */
 function copiesByName(archiveRoot: string, session: string, harnesses: readonly Harness[] = HARNESSES): string[] {
-  const rollout = rolloutName(session, '.jsonl.gz');
+  const key = new Set([session]);
   const found: string[] = [];
   for (const harness of harnesses) {
     const harnessDir = path.join(archiveRoot, harness);
     for (const project of listDir(harnessDir)) {
       const dir = path.join(harnessDir, project);
-      if (harness === 'codex') {
-        for (const name of listDir(dir)) if (rollout.test(name)) found.push(path.join(dir, name));
+      for (const name of listDir(dir)) {
+        if (name.endsWith('.jsonl.gz') && isForgotten(sessionsOfName(name), key)) found.push(path.join(dir, name));
       }
-      if (fs.existsSync(path.join(dir, `${session}.jsonl.gz`))) found.push(path.join(dir, `${session}.jsonl.gz`));
     }
   }
   return found;
@@ -182,25 +191,22 @@ export interface HarnessDirs {
 /** Whether `session` is one Claude Code or Codex keeps: rows of theirs in the
  * store, an archive copy under their harness, or their transcript of it,
  * matched by name as the archive copies are. Any transcript under their
- * folders counts, at any depth: sync forgets a transcript by its file name
- * (sync.ts, syncTranscript), so a key naming a Codex rollout or a subagent's
+ * folders counts, at any depth: sync forgets a transcript by what its file
+ * name says (isForgotten), so a key naming a Codex rollout or a subagent's
  * agent-<id>.jsonl would otherwise forget it. A Claude Code session's
  * subagents are in a <project>/<session>/ folder, which counts too. */
 function heldByAnotherHarness(
   session: string,
-  { store, archiveRoot, coworkRoot, dirs }: { store?: StoreHandle; archiveRoot: string; coworkRoot: string; dirs: HarnessDirs }
+  { rows, archiveRoot, coworkRoot, dirs }: { rows: ConversationExchange[]; archiveRoot: string; coworkRoot: string; dirs: HarnessDirs }
 ): boolean {
-  if (store && storedRows(store, session).some((row) => (row.harness ?? 'claude') !== 'cowork')) return true;
+  if (rows.some((row) => (row.harness ?? 'claude') !== 'cowork')) return true;
   if (copiesByName(archiveRoot, session, ['claude', 'codex']).length > 0) return true;
   for (const project of listDir(dirs.claude)) {
     if (fs.existsSync(path.join(dirs.claude, project, session))) return true;
   }
-  const rollout = rolloutName(session, '.jsonl');
+  const key = new Set([session]);
   for (const dir of [dirs.claude, dirs.codex]) {
-    for (const file of walkJsonlFiles(dir, coworkRoot)) {
-      const name = path.basename(file);
-      if (name === `${session}.jsonl` || rollout.test(name)) return true;
-    }
+    for (const file of walkJsonlFiles(dir, coworkRoot)) if (isForgotten(sessionsOfName(file), key)) return true;
   }
   return false;
 }
@@ -238,7 +244,8 @@ export function forget(
 ): ForgetResult {
   const problem = sessionKeyProblem(session);
   if (problem) throw new RefusedError(problem);
-  if (coworkOnly && heldByAnotherHarness(session, { store, archiveRoot, coworkRoot, dirs: coworkOnly.dirs })) {
+  const rows = store ? forgottenRows(store, new Set([session])) : [];
+  if (coworkOnly && heldByAnotherHarness(session, { rows, archiveRoot, coworkRoot, dirs: coworkOnly.dirs })) {
     throw new RefusedError(
       `Nothing was changed: ${session} is a Claude Code or Codex session on this computer, and this server serves Cowork records only, ` +
         'so it does not forget other sessions. The user can forget it from a Claude Code or Codex session on this computer.'
@@ -297,7 +304,6 @@ export function forget(
       store?.meta.remove(syncCursorKey(from));
     }
   }
-  const rows = store ? storedRows(store, session) : [];
   // Plain files need no index writer, and a copy holds the whole conversation,
   // so they go now rather than with the rows. Found through the rows, the
   // record and the names in the archive, since a copy taken before a whole
@@ -403,7 +409,7 @@ export function forgetSessions(
   sessions: ReadonlySet<string>,
   { archiveRoot, coworkRoot, log }: { archiveRoot: string; coworkRoot?: string; log?: (line: string) => void }
 ): RemoveResult {
-  const rows = [...sessions].flatMap((session) => storedRows(store, session));
+  const rows = forgottenRows(store, sessions);
   return removeConversations(store, textIndex, groupByFile(rows), {
     archiveRoot,
     log,

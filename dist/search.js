@@ -2,6 +2,7 @@
 // search.ts feature set (vector / text / both, multi-concept AND, metadata
 // filters), backed by store.ts + vector-index.ts instead of sqlite-vec.
 import { generateQueryEmbedding } from './embeddings.js';
+import { isForgotten, rowSessions } from './forget.js';
 import { filterIds, getExchange, textSearch } from './store.js';
 /** Reciprocal Rank Fusion constant. 60 is the value from the original paper; its
  * job is to flatten the top of each list so one path's first place cannot
@@ -42,14 +43,17 @@ function snippetOf(exchange) {
 /** How deep each path digs before fusion. Too shallow and the two lists barely
  * overlap, which turns RRF back into "concatenate two lists" (design doc §06). */
 export const CANDIDATE_DEPTH = 50;
-/** A session the user asked to forget, whose rows the next sync will delete. */
+/** A row of a session the user asked to forget, whose rows the next sync
+ * will delete: by the row's session or its file's name (forget.ts). */
 function isExcluded(exchange, excluded) {
-    return excluded !== undefined && exchange.sessionId !== undefined && excluded.has(exchange.sessionId);
+    return excluded !== undefined && isForgotten(rowSessions(exchange), excluded);
 }
 /** Rows of forgotten sessions that are still stored, waiting for a sync to
  * delete them. Both paths dig this much deeper, since those rows are dropped
  * only after ranking and would otherwise push kept rows under the limit. Zero
- * once the sync has run: one index lookup per forgotten session. */
+ * once the sync has run: one index lookup per forgotten session. A row
+ * forgotten by its file's name alone is not counted, since only a walk over
+ * every row would find it; it is dropped all the same. */
 function excludedRowCount(store, excluded) {
     let rows = 0;
     for (const sessionId of excluded ?? [])

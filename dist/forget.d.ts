@@ -2,7 +2,7 @@ import { type Quarantine, type SetAside } from './cowork.js';
 import { type StoreHandle } from './store.js';
 import type { TextIndex } from './text-index.js';
 import { type RemoveResult } from './ttl.js';
-import { type Harness } from './types.js';
+import { type ConversationExchange, type Harness } from './types.js';
 /** STARMEMORY_FORGOTTEN_PATH, else ~/.config/starmemory/forgotten.txt. */
 export declare function defaultForgottenPath(env?: NodeJS.ProcessEnv): string;
 /** Every forgotten session key. A missing file is an empty list. */
@@ -13,6 +13,22 @@ export declare function readForgotten(file: string): Set<string>;
  * its last line would fuse two keys into one that matches neither, so the key
  * then starts on a line of its own. */
 export declare function addForgotten(file: string, session: string): void;
+/** Whether any of `sessions` is on the forgotten list: the one test that
+ * search, read, the summaries and the sync's archiving, indexing and
+ * deleting all go by. A row is judged by its own session and its file's name
+ * (rowSessions), since a transcript named after one session can carry lines
+ * of the session it was resumed from. A transcript or a copy, whose whole
+ * text is what gets copied, summarised or read, is judged by its name and
+ * every session its lines record (parser.ts, sessionIdsOf): a file holding a
+ * forgotten session's turns is not shown, while another session's rows from
+ * it are kept. */
+export declare function isForgotten(sessions: Iterable<string | undefined>, list: ReadonlySet<string>): boolean;
+/** The sessions a stored row belongs to, for isForgotten. */
+export declare function rowSessions(row: Pick<ConversationExchange, 'sessionId' | 'archivePath'>): (string | undefined)[];
+/** Every stored row that belongs to a session on `list` (rowSessions). The
+ * store indexes rows by session id but not by file, so this walks the rows,
+ * and only when the list is not empty. */
+export declare function forgottenRows(store: StoreHandle, list: ReadonlySet<string>): ConversationExchange[];
 export interface ForgetResult {
     session: string;
     /** Cowork record files removed at once, or set aside. */

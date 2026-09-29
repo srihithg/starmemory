@@ -29,8 +29,8 @@ import { formatResults, formatMultiConceptResults } from './format-results.js';
 import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { search, searchMultipleConcepts } from './search.js';
 import { DailyCap, LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, defaultQuarantineDays, defaultQuarantineRoot, defaultRememberDailyLimit, describeRemember, remember, serverScope, } from './cowork.js';
-import { defaultForgottenPath, describeForget, forget, readForgotten } from './forget.js';
-import { sessionIdsOf } from './parser.js';
+import { defaultForgottenPath, describeForget, forget, isForgotten, readForgotten } from './forget.js';
+import { sessionIdsOf, sessionsOfName } from './parser.js';
 import { defaultTranscriptDirs, harnessTranscriptDirs } from './sync.js';
 import { canStartSync, createSyncTrigger } from './sync-trigger.js';
 import { HARNESSES } from './types.js';
@@ -193,11 +193,10 @@ server.registerTool('read', {
         return refused;
     // Between a forget and the sync that deletes the rest, a path from an
     // earlier result, a Claude Code or Codex transcript among them, still
-    // opens. It must not.
+    // opens. It must not, nor a file with a forgotten session's turns
+    // anywhere in it.
     const text = readArchive(real);
-    const forgotten = forgottenNow();
-    const sessions = [...(await sessionIdsOf(real, text)), ...(await sessionIdsOf(filePath, ''))];
-    if (sessions.some((session) => forgotten.has(session))) {
+    if (isForgotten([...sessionIdsOf(real, text), ...sessionsOfName(filePath)], forgottenNow())) {
         return { content: [{ type: 'text', text: 'The user asked to forget that session, so it is not shown.' }], isError: true };
     }
     const lines = text.split('\n');

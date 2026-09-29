@@ -171,63 +171,66 @@ export async function detectHarness(filePath: string): Promise<Harness> {
   return 'claude';
 }
 
-/** How many lines from the top of a transcript say whose it is. */
-const SESSION_ID_LINES = 50;
+/** A Codex rollout's name: the time it started, then its session id. */
+const ROLLOUT_NAME = /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)$/;
 
-/** The session ids a transcript's lines record: the sessionId on Claude Code's
- * lines (in a subagent's file, the parent session's), a Cowork record's header,
- * and the session_meta a Codex rollout starts with, whose file name ends in the
- * id but does not equal it. */
+/** The sessions a transcript's or archive copy's file name says it holds:
+ * the name itself, which is the session for Claude Code and Cowork, and for
+ * a Codex rollout the id its name ends in. */
+export function sessionsOfName(filePath: string): string[] {
+  const name = path.basename(filePath).replace(/\.gz$/, '').replace(/\.jsonl$/, '');
+  const rollout = ROLLOUT_NAME.exec(name)?.[1];
+  return rollout ? [name, rollout] : [name];
+}
+
+/** The session ids one parsed line records: the sessionId on Claude Code's
+ * lines (in a subagent's file, the parent session's), a Cowork record's
+ * header, and the session_meta a Codex rollout starts with. */
+function sessionIdsOfLine(parsed: { type?: string; sessionId?: unknown; session?: unknown; payload?: { id?: unknown } }): string[] {
+  const found = [
+    parsed.sessionId,
+    parsed.type === COWORK_SESSION_LINE_TYPE ? parsed.session : undefined,
+    parsed.type === 'session_meta' ? parsed.payload?.id : undefined,
+  ];
+  return found.filter((id): id is string => typeof id === 'string' && id !== '');
+}
+
 function sessionIdsInLines(lines: Iterable<string>): Set<string> {
   const ids = new Set<string>();
   for (const line of lines) {
-    let parsed: { type?: string; sessionId?: unknown; session?: unknown; payload?: { id?: unknown } };
+    let parsed: Parameters<typeof sessionIdsOfLine>[0];
     try {
       parsed = JSON.parse(line);
     } catch {
       continue;
     }
-    const found = [
-      parsed.sessionId,
-      parsed.type === COWORK_SESSION_LINE_TYPE ? parsed.session : undefined,
-      parsed.type === 'session_meta' ? parsed.payload?.id : undefined,
-    ];
-    for (const id of found) if (typeof id === 'string' && id !== '') ids.add(id);
+    for (const id of sessionIdsOfLine(parsed)) ids.add(id);
   }
   return ids;
 }
 
-/** The sessions a transcript or archive copy belongs to: its file name, which
- * is the id for Claude Code and Cowork, and the ids its first lines record
- * (sessionIdsInLines). `text`, when the caller has the file's text already. */
-export async function sessionIdsOf(filePath: string, text?: string): Promise<Set<string>> {
-  const name = path.basename(filePath).replace(/\.gz$/, '').replace(/\.jsonl$/, '');
-  if (text !== undefined) return new Set([name, ...sessionIdsInLines(text.split('\n', SESSION_ID_LINES))]);
-  const head: string[] = [];
-  const input = openArchive(filePath);
-  const rl = readline.createInterface({ input, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      head.push(line);
-      if (head.length >= SESSION_ID_LINES) break;
-    }
-  } finally {
-    rl.close();
-    input.destroy();
-  }
-  return new Set([name, ...sessionIdsInLines(head)]);
+/** The sessions a transcript or archive copy belongs to, given its text:
+ * what its name says (sessionsOfName) and every id any of its lines
+ * records, so a session that joins a file late is found as well as the one
+ * it starts with. */
+export function sessionIdsOf(filePath: string, text: string): Set<string> {
+  return new Set([...sessionsOfName(filePath), ...sessionIdsInLines(text.split('\n'))]);
 }
 
+/** `sessions`, when given, gets every session id the file's lines record
+ * (sessionIdsOf), those of lines that make no exchange included, from the
+ * same read. */
 export async function parseConversation(
   filePath: string,
   project: string,
-  archivePath: string
+  archivePath: string,
+  sessions?: Set<string>
 ): Promise<ParsedExchange[]> {
   const harness = await detectHarness(filePath);
   if (harness === 'codex') {
-    return parseCodexConversation(filePath, project, archivePath);
+    return parseCodexConversation(filePath, project, archivePath, sessions);
   }
-  return parseClaudeConversation(filePath, project, archivePath, harness);
+  return parseClaudeConversation(filePath, project, archivePath, harness, sessions);
 }
 
 interface CodexRolloutLine {
@@ -262,7 +265,8 @@ function codexText(content: unknown): string {
 async function parseCodexConversation(
   filePath: string,
   fallbackProject: string,
-  archivePath: string
+  archivePath: string,
+  sessions?: Set<string>
 ): Promise<ParsedExchange[]> {
   const exchanges: ParsedExchange[] = [];
   const rl = readline.createInterface({ input: openArchive(filePath), crlfDelay: Infinity });
@@ -302,6 +306,7 @@ async function parseCodexConversation(
     } catch {
       continue;
     }
+    for (const id of sessionIdsOfLine(parsed)) sessions?.add(id);
     const payload = parsed.payload;
     if (!payload) continue;
 
@@ -348,7 +353,8 @@ async function parseClaudeConversation(
   filePath: string,
   project: string,
   archivePath: string,
-  harness: Exclude<Harness, 'codex'> = 'claude'
+  harness: Exclude<Harness, 'codex'> = 'claude',
+  sessions?: Set<string>
 ): Promise<ParsedExchange[]> {
   const exchanges: ParsedExchange[] = [];
   const rl = readline.createInterface({
@@ -389,6 +395,7 @@ async function parseClaudeConversation(
     } catch {
       continue; // malformed line, skip
     }
+    for (const id of sessionIdsOfLine(parsed)) sessions?.add(id);
 
     if (parsed.type !== 'user' && parsed.type !== 'assistant') continue;
     if (!parsed.message) continue;

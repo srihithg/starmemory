@@ -190,7 +190,10 @@ the new one waits for it, and the sync holding it takes on what arrived
 meanwhile before it exits. `remember` refuses the session afterwards, and a
 forget said before the first entry works too. A Claude Code or Codex session id
 works from Claude Code or Codex, or from Cowork once you opt in. That transcript
-stays where the harness keeps it, but starmemory stops indexing it.
+stays where the harness keeps it, but starmemory stops indexing it. The same goes
+for any transcript with the session's turns in it, such as one resumed from it:
+while the session is forgotten it is not copied, summarised or opened by `read`,
+though the exchanges of other sessions already indexed from it stay.
 
 A record forgotten from Cowork is not deleted at once. It is set aside in
 `~/.config/starmemory/quarantine/<project>/`, readable by you alone, for 7 days,

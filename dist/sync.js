@@ -6,10 +6,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { detectHarness, parseConversation, projectFromPath, sessionIdsOf, walkJsonlFiles } from './parser.js';
+import { detectHarness, parseConversation, projectFromPath, sessionsOfName, walkJsonlFiles } from './parser.js';
 import { archivePathFor, copyIfChanged, defaultArchiveRoot, summaryPathFor } from './archive.js';
 import { defaultCoworkRoot, defaultQuarantineRoot, purgeQuarantine, quarantineRecord, recordIdentity } from './cowork.js';
-import { defaultForgottenPath, forgetSessions, readForgotten } from './forget.js';
+import { defaultForgottenPath, forgetSessions, isForgotten, readForgotten } from './forget.js';
 import { DEFAULT_SUMMARY_LIMIT, summarizeQuietConversations } from './summaries.js';
 import { defaultTtlDays, expireOldConversations, ttlCutoffMs } from './ttl.js';
 import { EMBEDDING_MODEL, generateExchangeEmbedding } from './embeddings.js';
@@ -177,7 +177,8 @@ async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff
     // sits under a date directory, its project is the cwd in session_meta. The
     // cursor stays keyed by the source path: switching the key would make every
     // file look new on the first sync after this change and double every row.
-    const parsed = await parseConversation(filePath, project, filePath);
+    const lineSessions = new Set();
+    const parsed = await parseConversation(filePath, project, filePath, lineSessions);
     const harness = parsed[0]?.harness ?? (await detectHarness(filePath));
     const resolvedProject = parsed[0]?.project ?? project;
     const copy = archivePathFor(archiveRoot, harness, resolvedProject, filePath);
@@ -187,12 +188,12 @@ async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff
     // harness wrote is the harness's to keep, and its cursor stays: taking the
     // session off the list resumes indexing from there, and what the forget
     // deleted is not brought back, so nothing is ever indexed twice. Whose it
-    // is: the file name, as forget and read also go by, and the session its
-    // lines record, read from its first lines when it has no exchange yet, since
-    // a Codex rollout is not named after its session. A match on this sync's
-    // list, read when it started, is confirmed on the list as it is now: the
-    // user may have taken the forget back since, and written a new record.
-    const sessions = [...new Set([path.basename(filePath, '.jsonl'), ...(parsed[0]?.sessionId ? [parsed[0].sessionId] : await sessionIdsOf(filePath))])];
+    // is: its name and every session any of its lines records, as read and the
+    // summaries also go by (forget.ts, isForgotten), since the copy would hold
+    // all of it. A match on this sync's list, read when it started, is
+    // confirmed on the list as it is now: the user may have taken the forget
+    // back since, and written a new record.
+    const sessions = [...new Set([...sessionsOfName(filePath), ...lineSessions])];
     const leaveOut = () => {
         // Only a file in the records folder is ours, as with the TTL above: one
         // elsewhere that reads as a record is still a file some harness wrote.
@@ -202,11 +203,8 @@ async function syncTranscript(store, filePath, { archiveRoot, coworkRoot, cutoff
             fs.rmSync(file, { force: true });
         return { indexed: 0, archived: false };
     };
-    const onListNow = () => {
-        const list = forgottenNow();
-        return sessions.some((s) => list.has(s));
-    };
-    if (sessions.some((s) => forgotten.has(s)) && onListNow())
+    const onListNow = () => isForgotten(sessions, forgottenNow());
+    if (isForgotten(sessions, forgotten) && onListNow())
         return leaveOut();
     const archived = await copyIfChanged(filePath, copy);
     // A forget that landed while the copy was being made found no copy to
@@ -360,17 +358,15 @@ export async function syncAll(store, index, transcriptsDirs = defaultTranscriptD
     const envLimit = Number(process.env.STARMEMORY_SUMMARY_LIMIT);
     const limit = options.summaries?.limit ?? (Number.isFinite(envLimit) && process.env.STARMEMORY_SUMMARY_LIMIT !== undefined ? envLimit : DEFAULT_SUMMARY_LIMIT);
     const summaries = await summarizeQuietConversations(candidates, {
-        skip: (c) => {
-            const now = readForgotten(forgottenPath);
-            return [c.sessionId, ...(c.sessions ?? [])].some((s) => s !== undefined && now.has(s));
-        },
+        skip: (c) => isForgotten([c.sessionId, ...(c.sessions ?? [])], readForgotten(forgottenPath)),
         ...options.summaries,
         limit,
     });
     // What arrived while this sync ran: sessions forgotten meanwhile, rows other
     // syncs stored but could not index. They could not take the writer, since
     // tantivy keeps it until this process exits, so the work is ours. Cheap when
-    // there is none: one lookup per forgotten session, and an empty text sync.
+    // there is none: a walk over the stored rows, only while some session is
+    // forgotten, and an empty text sync.
     // Both or neither: a writer freed between the two must not have this sync
     // index the rows of a session it could not delete. Rows another sync stored
     // after this one built its graph get a rebuild too: two syncs rebuilding at

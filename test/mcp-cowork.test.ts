@@ -234,6 +234,26 @@ describe('read', () => {
 
     expect((await call('read', { path: subagent })).text).toContain('asked to forget');
   });
+
+  it('refuses a transcript that a forgotten session joins well past its first lines', async () => {
+    const file = path.join(dir, 'claude', 'projects', '-Users-me-lanterns', 'joined-late.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const turn = (sessionId: string, q: string) => [
+      { type: 'user', promptSource: 'typed', sessionId, timestamp: '2026-09-28T10:00:00.000Z', message: { role: 'user', content: q } },
+      { type: 'assistant', sessionId, timestamp: '2026-09-28T10:00:05.000Z', message: { role: 'assistant', content: 'noted' } },
+    ];
+    // History carried over from an earlier session, then the one forgotten.
+    const lines = [...Array.from({ length: 30 }, (_, i) => turn('carried-over', `carried question ${i}`)).flat(), ...turn('late-joiner', 'the late question')];
+    fs.writeFileSync(file, lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+    expect((await call('read', { path: file })).text).toContain('the late question');
+
+    await call('forget', { session: 'late-joiner' });
+
+    const result = await call('read', { path: file });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('asked to forget');
+    expect(result.text).not.toContain('the late question');
+  });
 });
 
 describe('a server that serves Cowork records only', () => {

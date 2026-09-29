@@ -27,11 +27,19 @@ export declare const COWORK_SESSION_LINE_TYPE = "cowork_session";
  * Unknown or empty files are read as Claude, the format that existed first.
  * Works on an archive copy too, since openArchive undoes the gzip. */
 export declare function detectHarness(filePath: string): Promise<Harness>;
-/** The sessions a transcript or archive copy belongs to: its file name, which
- * is the id for Claude Code and Cowork, and the ids its first lines record
- * (sessionIdsInLines). `text`, when the caller has the file's text already. */
-export declare function sessionIdsOf(filePath: string, text?: string): Promise<Set<string>>;
-export declare function parseConversation(filePath: string, project: string, archivePath: string): Promise<ParsedExchange[]>;
+/** The sessions a transcript's or archive copy's file name says it holds:
+ * the name itself, which is the session for Claude Code and Cowork, and for
+ * a Codex rollout the id its name ends in. */
+export declare function sessionsOfName(filePath: string): string[];
+/** The sessions a transcript or archive copy belongs to, given its text:
+ * what its name says (sessionsOfName) and every id any of its lines
+ * records, so a session that joins a file late is found as well as the one
+ * it starts with. */
+export declare function sessionIdsOf(filePath: string, text: string): Set<string>;
+/** `sessions`, when given, gets every session id the file's lines record
+ * (sessionIdsOf), those of lines that make no exchange included, from the
+ * same read. */
+export declare function parseConversation(filePath: string, project: string, archivePath: string, sessions?: Set<string>): Promise<ParsedExchange[]>;
 /** Every .jsonl file under `dir`, at any depth, leaving out the folder `skip`
  * and everything in it. A missing folder yields nothing. */
 export declare function walkJsonlFiles(dir: string, skip?: string): Generator<string>;

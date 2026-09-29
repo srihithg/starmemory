@@ -13,7 +13,7 @@ import { EMBEDDING_DIM, initEmbeddings } from '../src/embeddings.js';
 import { syncAll } from '../src/sync.js';
 import { readArchive, summaryPathFor } from '../src/archive.js';
 import { findSetAside, quarantineRecords, remember } from '../src/cowork.js';
-import { forget } from '../src/forget.js';
+import { forget, readForgotten } from '../src/forget.js';
 import { search } from '../src/search.js';
 import { TextIndex } from '../src/text-index.js';
 import type { ConversationExchange } from '../src/types.js';
@@ -624,25 +624,53 @@ describe('taking a forget back, and what goes by the file name', () => {
     forget('newer', { coworkRoot, forgottenPath, archiveRoot, store });
     await sync({}, { dirs: [coworkRoot] });
     expect(exchangesFrom(store, 0).map((r) => r.sessionId)).toEqual(['older']);
+
+    // A full sync while `newer` is still forgotten, the file quiet long enough
+    // to be summarised: its first lines are older's, and newer's turns follow.
+    const then = new Date(Date.now() - 3 * HOUR);
+    fs.utimesSync(file, then, then);
+    const summarised: (string | undefined)[] = [];
+    const summarizers = {
+      claude: async ({ sessionId }: { sessionId?: string }) => { summarised.push(sessionId); return 'A summary.'; },
+      codex: async () => 'never',
+    };
+    await sync({ summaries: { summarizers, quietMs: HOUR } }, { dirs });
+    const copy = path.join(archiveRoot, 'claude', '-Users-me-lanterns', 'mixed.jsonl.gz');
+    expect({
+      copied: fs.existsSync(copy),
+      summary: fs.existsSync(summaryPathFor(copy)),
+      summarised,
+      rows: exchangesFrom(store, 0).map((r) => r.sessionId),
+    }).toEqual({ copied: false, summary: false, summarised: [], rows: ['older'] });
+
     fs.writeFileSync(forgottenPath, '');
     await sync({}, { dirs });
 
     expect(exchangesFrom(store, 0).map((r) => r.sessionId)).toEqual(['older']);
   }, 120_000);
 
-  it('keeps a transcript forgotten by its file name even when its lines name another session', async () => {
+  it('forgets a transcript by its file name even when its lines name another session: its copy, and its rows in search and in the store', async () => {
     const file = claudeTranscript('new-id', 'old-id');
     const dirs = [path.join(dir, 'claude')];
     await sync({}, { dirs });
     const copy = path.join(archiveRoot, 'claude', '-Users-me-lanterns', 'new-id.jsonl.gz');
     expect(fs.existsSync(copy)).toBe(true);
+    expect(exchangesFrom(store, 0).map((r) => r.sessionId)).toEqual(['old-id']);
+    const index = openIndex(store, path.join(dir, 'index.hnsw'));
+    const found = async () => (await search(store, index, 'trim a wick', { excludeSessions: readForgotten(forgottenPath) })).map((r) => r.exchange.sessionId);
+    expect(await found()).toEqual(['old-id']);
 
     forget('new-id', { coworkRoot, forgottenPath, archiveRoot, store });
+    // Hidden at once, then deleted by the sync the forget starts, which does
+    // not walk the transcript.
+    expect(await found()).toEqual([]);
+    await sync({}, { dirs: [coworkRoot] });
+    expect(exchangesFrom(store, 0)).toEqual([]);
     const later = new Date(Date.now() + 2000);
     fs.utimesSync(file, later, later);
     await sync({}, { dirs });
 
-    expect(fs.existsSync(copy)).toBe(false);
+    expect({ copied: fs.existsSync(copy), rows: exchangesFrom(store, 0), found: await found() }).toEqual({ copied: false, rows: [], found: [] });
   }, 120_000);
 
   it('carries on, and leaves no summary file, when a transcript with no whole exchange is forgotten during the summaries', async () => {
