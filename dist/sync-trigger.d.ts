@@ -19,6 +19,9 @@ export declare function spawnBackgroundSync(entry?: string): boolean;
 export interface SyncTriggerOptions {
     start?: () => unknown;
     intervalMs?: number;
+    /** Milliseconds on a clock that only moves forward; performance.now() by
+     * default. With the wall clock, setting the time back an hour would hold
+     * every sync for that hour. */
     now?: () => number;
     setTimer?: (callback: () => void, ms: number) => {
         unref?: () => void;

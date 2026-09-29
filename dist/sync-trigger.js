@@ -47,7 +47,7 @@ export function spawnBackgroundSync(entry = CLI_ENTRY) {
  * requests inside the interval share a single sync at its end. Every sync loads
  * the embedding model, so a burst of remember calls costs two syncs, not one
  * each. */
-export function createSyncTrigger({ start = spawnBackgroundSync, intervalMs = 5000, now = Date.now, setTimer = setTimeout, } = {}) {
+export function createSyncTrigger({ start = spawnBackgroundSync, intervalMs = 5000, now = () => performance.now(), setTimer = setTimeout, } = {}) {
     let last = Number.NEGATIVE_INFINITY;
     let pending = false;
     return () => {

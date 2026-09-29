@@ -73,6 +73,23 @@ describe('createSyncTrigger', () => {
 
     expect(started).toEqual([0, 6000]);
   });
+
+  it('keeps to its interval when the system clock is set back', async () => {
+    let wall = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => wall);
+    let started = 0;
+    try {
+      const trigger = createSyncTrigger({ intervalMs: 20, start: () => started++ });
+      trigger();
+      wall -= 60 * 60 * 1000;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      trigger();
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(started).toBe(2);
+  });
 });
 
 async function eventually(probe: () => boolean, timeoutMs = 20_000): Promise<boolean> {

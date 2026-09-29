@@ -101,13 +101,14 @@ export function syncTextIndex(store, index) {
 export const WRITER_WAIT_MS = 30_000;
 const WRITER_POLL_MS = 500;
 /** Take the writer another process holds, polling until `waitMs` is up:
- * tantivy has no blocking acquire. */
+ * tantivy has no blocking acquire. Timed by performance.now(), which a clock
+ * set back cannot stretch. */
 async function waitForWriter(textIndex, waitMs) {
-    const deadline = Date.now() + waitMs;
+    const deadline = performance.now() + waitMs;
     for (;;) {
         if (textIndex.tryAcquireWriter())
             return true;
-        const left = deadline - Date.now();
+        const left = deadline - performance.now();
         if (left <= 0)
             return false;
         await new Promise((resolve) => setTimeout(resolve, Math.min(WRITER_POLL_MS, left)));
@@ -351,9 +352,9 @@ export async function syncAll(store, index, transcriptsDirs = defaultTranscriptD
     const writerWaitMs = options.writerWaitMs ?? 0;
     if (textIndex && writerWaitMs > 0 && (forgetting.skipped || expiry.skipped || (textSync?.skipped && exchangesIndexed > 0))) {
         log(`starmemory: another sync holds the text-index writer; waiting up to ${Math.round(writerWaitMs / 1000)} s for it`);
-        const waitStarted = Date.now();
+        const waitStarted = performance.now();
         if (await waitForWriter(textIndex, writerWaitMs)) {
-            log(`starmemory: took the text-index writer after ${((Date.now() - waitStarted) / 1000).toFixed(1)} s`);
+            log(`starmemory: took the text-index writer after ${((performance.now() - waitStarted) / 1000).toFixed(1)} s`);
             let removed = 0;
             if (forgetting.skipped)
                 removed += (forgetting = forgetNow()).rows;

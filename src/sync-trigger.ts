@@ -50,6 +50,9 @@ export function spawnBackgroundSync(entry: string = CLI_ENTRY): boolean {
 export interface SyncTriggerOptions {
   start?: () => unknown;
   intervalMs?: number;
+  /** Milliseconds on a clock that only moves forward; performance.now() by
+   * default. With the wall clock, setting the time back an hour would hold
+   * every sync for that hour. */
   now?: () => number;
   setTimer?: (callback: () => void, ms: number) => { unref?: () => void };
 }
@@ -61,7 +64,7 @@ export interface SyncTriggerOptions {
 export function createSyncTrigger({
   start = spawnBackgroundSync,
   intervalMs = 5000,
-  now = Date.now,
+  now = () => performance.now(),
   setTimer = setTimeout,
 }: SyncTriggerOptions = {}): () => void {
   let last = Number.NEGATIVE_INFINITY;
