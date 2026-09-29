@@ -459,7 +459,8 @@ describe('the launcher the Claude app runs', () => {
       );
       // The launcher as desktop-install copied it before it set the scope.
       const current = fs.readFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), 'utf8');
-      const older = current.replace(/^.*STARMEMORY_SCOPE \?\?=.*\n/m, '');
+      // A Windows checkout ends each line with CRLF.
+      const older = current.replace(/^.*STARMEMORY_SCOPE \?\?=.*\r?\n/m, '');
       expect(older).not.toBe(current);
       const desktop = path.join(base, '.config', 'starmemory', 'desktop');
       fs.mkdirSync(desktop, { recursive: true });
