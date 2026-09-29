@@ -118,8 +118,9 @@ About `desktop-install`:
   overwritten, unless you add `--replace`.
 - Each run leaves a backup of the config beside it, which holds the same
   credentials as the config. Delete the backups once the app works.
-- The entry runs a small launcher in `~/.config/starmemory/desktop/` that starts
-  the newest copy of starmemory Claude Code has installed from the same
+- The entry runs a small launcher in `~/.config/starmemory/desktop/`, which a
+  newer plugin replaces, from the app's next start. The launcher starts the
+  newest copy of starmemory Claude Code has installed from the same
   marketplace, so plugin updates reach Cowork without running `desktop-install`
   again. It prefers a copy whose dependencies are already installed, even an
   older one, so the app does not wait on npm install.

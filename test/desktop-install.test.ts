@@ -13,7 +13,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 // @ts-expect-error -- plain JS module, no type declarations by design
 import { DEFAULT_SERVER_NAME, desktopConfigPath, launcherDir, main, writeConfig as writeConfigFile } from '../cli/desktop-install.mjs';
 // @ts-expect-error -- plain JS module, no type declarations by design
-import { isPrepared, resolvePluginRoot } from '../cli/desktop-launch.mjs';
+import { LAUNCHER_VERSION, isPrepared, resolvePluginRoot } from '../cli/desktop-launch.mjs';
 // @ts-expect-error -- plain JS module, no type declarations by design
 import { RUNTIME_DEPENDENCIES, findMissingAddons, findMissingDeps } from '../cli/install-check.mjs';
 
@@ -106,7 +106,7 @@ describe('desktop-install', () => {
   it('records the copy it ran from for the launcher, and follows Claude Code only for a copy Claude Code installed', () => {
     install();
 
-    expect(readLaunch()).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false });
+    expect(readLaunch()).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION });
   });
 
   it('pins the launcher to the plugin it ran from, by the marketplace its copy sits under', () => {
@@ -117,7 +117,7 @@ describe('desktop-install', () => {
       const { status, output } = install([], path.join(copy, 'cli', 'starmemory.mjs'));
 
       expect(status).toBe(0);
-      expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme' });
+      expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION });
       expect(output).toContain('or whichever version of starmemory@acme Claude Code has installed newest at launch');
     }
   });
@@ -127,7 +127,7 @@ describe('desktop-install', () => {
 
     expect(install([], path.join(copy, 'cli', 'starmemory.mjs')).status).toBe(0);
 
-    expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir: path.join(home, '.claude', 'plugins'), follow: false });
+    expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION });
   });
 
   it('uses the name given with --name, and drops its own earlier entry but no one else\'s', () => {
@@ -693,6 +693,88 @@ describe('the stable launcher', () => {
     expect(resolvePluginRoot(launch)).toBe(release);
     fs.rmSync(release, { recursive: true });
     expect(resolvePluginRoot(launch)).toBe(beta);
+  });
+
+  /** A copy of this checkout at `copy` whose bootstrap, in place of installing
+   * and starting the server, prints `name`. */
+  function stubbedCopy(copy: string, version: string, name: string) {
+    freshCopy(copy);
+    const pkg = JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8'));
+    fs.writeFileSync(path.join(copy, 'package.json'), JSON.stringify({ ...pkg, version }));
+    fs.writeFileSync(
+      path.join(copy, 'cli', 'bootstrap.mjs'),
+      `export async function ensureReady() { return true; }\nexport function handOff() { process.stdout.write(${JSON.stringify(name)}); }\n`
+    );
+    return copy;
+  }
+
+  /** The launcher and launch.json 0.3.0's desktop-install left, with no
+   * marketplace and no launcherVersion, following Claude Code to a copy of
+   * this checkout. */
+  function launcherFrom030() {
+    const pluginsDir = path.join(home, '.claude', 'plugins');
+    const own = stubbedCopy(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.4.0'), '0.4.0', 'own');
+    const desktop = launcherDir(env);
+    const launcher = path.join(desktop, 'launch.mjs');
+    fs.mkdirSync(desktop, { recursive: true });
+    fs.copyFileSync(path.join(root, 'test', 'fixtures', 'desktop-launch-0.3.0.mjs'), launcher);
+    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ root: own, pluginsDir, follow: true }));
+    const start = (script = launcher) => spawnSync(process.execPath, [script], { env, encoding: 'utf8', timeout: 20_000 });
+    const files = () =>
+      fs.readdirSync(desktop).sort().map((name) => {
+        const file = path.join(desktop, name);
+        return [name, fs.statSync(file).ino, fs.statSync(file).mtimeMs, fs.readFileSync(file, 'utf8')];
+      });
+    return { pluginsDir, own, desktop, launcher, start, files };
+  }
+
+  it('brings a launcher an older desktop-install copied up to this copy\'s, from the server it starts, once', () => {
+    const { pluginsDir, own, desktop, launcher, start, files } = launcherFrom030();
+    const untouched = files();
+
+    // Claude Code starts the server itself, which leaves the launcher alone.
+    expect(start(path.join(own, 'cli', 'mcp-server.mjs')).stdout).toBe('own');
+    expect(files()).toEqual(untouched);
+
+    expect(start().stdout).toBe('own');
+
+    expect(fs.readFileSync(launcher, 'utf8')).toBe(fs.readFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), 'utf8'));
+    expect(fs.readFileSync(path.join(desktop, 'run-node.sh'), 'utf8')).toBe(fs.readFileSync(path.join(root, 'cli', 'run-node.sh'), 'utf8'));
+    expect(readLaunch()).toEqual({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION });
+    expect(fs.readdirSync(desktop).sort()).toEqual(['launch.json', 'launch.mjs', 'run-node.sh']);
+
+    // A higher version from another marketplace, which the old launcher would
+    // have started, is passed over, and starting again changes nothing.
+    stubbedCopy(path.join(pluginsDir, 'cache', 'evil', 'starmemory', '9.0.0'), '9.0.0', 'someone else');
+    const replaced = files();
+    expect(start().stdout).toBe('own');
+    expect(files()).toEqual(replaced);
+
+    // Nor does this copy put its launcher back over a newer one.
+    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ ...readLaunch(), launcherVersion: LAUNCHER_VERSION + 1 }));
+    const newer = files();
+    expect(start().stdout).toBe('own');
+    expect(files()).toEqual(newer);
+  });
+
+  it('starts the server all the same when it cannot replace the launcher, and says so in one line', () => {
+    // A folder's mode stops neither Windows' owner nor root.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const { desktop, start, files } = launcherFrom030();
+    const untouched = files();
+    fs.chmodSync(desktop, 0o555);
+    try {
+      const { stdout, stderr } = start();
+
+      expect(stdout).toBe('own');
+      const lines = stderr.trim().split('\n');
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/^starmemory: starting the MCP server from /);
+      expect(lines[1]).toMatch(/^starmemory: could not update the Claude app's launcher: EACCES/);
+    } finally {
+      fs.chmodSync(desktop, 0o755);
+    }
+    expect(files()).toEqual(untouched);
   });
 
   it('serves the four tools through exactly the command written into the config', async () => {

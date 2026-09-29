@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { LAUNCH_CONFIG, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot } from './desktop-launch.mjs';
+import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot } from './desktop-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -173,20 +173,50 @@ export function withServer(config, name, entry, launcher) {
  * used as it is. */
 export function launchConfig({ root, pluginsDir }) {
   const marketplace = marketplaceOf(root, pluginsDir);
-  if (!marketplace) return { root, pluginsDir, follow: false };
-  return { root, pluginsDir, follow: true, plugin: `starmemory@${marketplace}`, marketplace };
+  const follow = marketplace ? { follow: true, plugin: `starmemory@${marketplace}`, marketplace } : { follow: false };
+  return { root, pluginsDir, ...follow, launcherVersion: LAUNCHER_VERSION };
 }
 
 /** Copy the launcher and the node-finding shim into `dir`, and record `launch`
  * beside them. Rewritten on every run, so running this again brings a newer
- * launcher along. */
+ * launcher along. Each file is replaced whole, so an app starting meanwhile
+ * runs the old launcher or the new one, and launch.json goes last, since its
+ * launcherVersion speaks for the files beside it. */
 export function installLauncher(dir, launch) {
   fs.mkdirSync(dir, { recursive: true });
   const launcher = path.join(dir, 'launch.mjs');
-  fs.copyFileSync(path.join(here, 'desktop-launch.mjs'), launcher);
-  fs.copyFileSync(path.join(here, 'run-node.sh'), path.join(dir, 'run-node.sh'));
-  fs.writeFileSync(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`);
+  for (const [from, to] of [['desktop-launch.mjs', launcher], ['run-node.sh', path.join(dir, 'run-node.sh')]]) {
+    const source = path.join(here, from);
+    replaceFile(to, fs.readFileSync(source), fs.statSync(source).mode & 0o777);
+  }
+  replaceFile(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`, 0o644);
   return launcher;
+}
+
+/** Replace the launcher the Claude app started this process from with this
+ * copy's, when launch.json records an older one or none: desktop-install is
+ * the only other thing that copies it. The launcher running now is loaded
+ * already, so the new one runs from the app's next start. A launch.json from
+ * before the marketplace was recorded is pinned as desktop-install pins one
+ * now. Writes only in the launcher's folder, and nothing unless the launcher
+ * started this process. True when it replaced the launcher. */
+export function refreshLauncher({ env = process.env, script = process.argv[1] } = {}) {
+  const dir = launcherDir(env);
+  if (script === undefined || !sameFile(script, path.join(dir, 'launch.mjs'))) return false;
+  let launch;
+  try {
+    launch = JSON.parse(fs.readFileSync(path.join(dir, LAUNCH_CONFIG), 'utf8'));
+  } catch {
+    return false; // the launcher cannot have started anything without it
+  }
+  // A newer one stays: the launcher can start an older copy, a prepared one.
+  if (typeof launch?.root !== 'string' || launch.launcherVersion >= LAUNCHER_VERSION) return false;
+  const current =
+    launch.follow && !launch.marketplace && launch.pluginsDir
+      ? launchConfig({ root: launch.root, pluginsDir: launch.pluginsDir })
+      : { ...launch, launcherVersion: LAUNCHER_VERSION };
+  installLauncher(dir, current);
+  return true;
 }
 
 function stamp(date) {
@@ -206,12 +236,35 @@ export function backupConfig(file, now = new Date()) {
   }
 }
 
+/** `contents` into `file` with `mode`, written beside it and renamed in, so no
+ * one reads half a file. The file beside it has a name no one can guess, and
+ * is created new, never opened through a link or a file already there. */
+function replaceFile(file, contents, mode, token = randomBytes(8).toString('hex')) {
+  const temp = `${file}.starmemory-${token}.tmp`;
+  // Throws, touching nothing, when anything is at that name already.
+  const fd = fs.openSync(temp, 'wx', mode);
+  try {
+    try {
+      fs.writeFileSync(fd, contents);
+      try {
+        fs.fchmodSync(fd, mode); // the umask can have narrowed it
+      } catch {
+        // a file system without modes
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
 /** Written beside and renamed in, keeping the file's mode, so the app never
  * reads half a file. A config that is a link, into a dotfiles folder say, is
- * written where the link points, so the link stays one. The file beside it has
- * a name no one can guess, and is created new, never opened through a link or
- * a file already there. */
-export function writeConfig(configPath, config, token = randomBytes(8).toString('hex')) {
+ * written where the link points, so the link stays one. */
+export function writeConfig(configPath, config, token) {
   let file = configPath;
   try {
     file = fs.realpathSync(configPath);
@@ -230,25 +283,7 @@ export function writeConfig(configPath, config, token = randomBytes(8).toString(
   } catch {
     // no config yet: 0600, since it will hold credentials sooner or later
   }
-  const temp = `${file}.starmemory-${token}.tmp`;
-  // Throws, touching nothing, when anything is at that name already.
-  const fd = fs.openSync(temp, 'wx', mode);
-  try {
-    try {
-      fs.writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
-      try {
-        fs.fchmodSync(fd, mode); // the umask can have narrowed it
-      } catch {
-        // a file system without modes
-      }
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(temp, file);
-  } catch (error) {
-    fs.rmSync(temp, { force: true });
-    throw error;
-  }
+  replaceFile(file, `${JSON.stringify(config, null, 2)}\n`, mode, token);
 }
 
 /** Claude Code started by the Claude app itself, in its Code tab or as its

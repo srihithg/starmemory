@@ -19,9 +19,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-/** What desktop-install records beside this file: { root, pluginsDir, follow },
- * and with follow, { plugin: "starmemory@<marketplace>", marketplace }. */
+/** What desktop-install records beside this file: { root, pluginsDir, follow,
+ * launcherVersion }, and with follow, { plugin: "starmemory@<marketplace>",
+ * marketplace }. */
 export const LAUNCH_CONFIG = 'launch.json';
+/** This file's version, recorded in launch.json as launcherVersion. Raise it
+ * with any change a launcher copied already should get: the MCP server of a
+ * newer plugin, started by a launcher recorded with a lower one or none, copies
+ * this file over it. */
+export const LAUNCHER_VERSION = 1;
 export const MIN_NODE_MAJOR = 22;
 
 function readJson(file) {
