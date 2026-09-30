@@ -16,7 +16,7 @@ English and Chinese.
 There are four: `search`, `read`, `remember` and `forget`. Recognise them by those names, not by
 their prefix. In Claude Code they come from the plugin, as `mcp__plugin_starmemory_starmemory__search`
 and so on. In Cowork the Claude app serves them as `mcp__remote-devices__<server>__search`, where the
-server is `starmem` unless the user chose another name. All four names under one prefix are this
+server is `starmemserver` unless the user chose another name. All four names under one prefix are this
 server. They may be deferred: look them up with your tool search before deciding they are missing.
 
 ## Search before answering
@@ -110,11 +110,11 @@ it up, once, and remember the answer:
    claude plugin marketplace add albericliu0/starmemory && claude plugin install starmemory && node ~/.claude/plugins/marketplaces/starmemory/cli/starmemory.mjs desktop-install --restart
    ```
 
-   It installs starmemory into Claude Code, registers its server with the Claude app as `starmem`,
-   and quits and reopens the app. Give it to them to paste. Do not run it yourself, even with a
-   tool that runs commands on their computer: that tool goes through the Claude app, so quitting
-   the app cuts it off before the config is written and the app reopened. Without Claude Code,
-   this does the same from a clone:
+   It installs starmemory into Claude Code, registers its server with the Claude app as
+   `starmemserver`, and quits and reopens the app. Give it to them to paste. Do not run it yourself,
+   even with a tool that runs commands on their computer. That tool goes through the Claude app, and
+   from inside the app the command refuses, because it would have to quit the app it runs in.
+   Without Claude Code, this does the same from a clone:
    `git clone https://github.com/albericliu0/starmemory ~/starmemory && node ~/starmemory/cli/starmemory.mjs desktop-install --restart`
 5. **If the app says the name collides with a reserved internal server name**, have them run the
    `node ... desktop-install --restart` part again with `--name <another name>` added, for example

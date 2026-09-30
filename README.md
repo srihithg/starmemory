@@ -77,7 +77,7 @@ there. starmemory works with both facts:
 
 - **The server runs on your Mac**, registered with the Claude desktop app,
   which serves it to every Cowork session linked to that Mac as
-  `mcp__remote-devices__starmem__search`, `read`, `remember` and `forget`.
+  `mcp__remote-devices__starmemserver__search`, `read`, `remember` and `forget`.
 - **The plugin, added to Cowork**, brings the `starmemory` skill and a
   start-up hook that tells each session to use it. The model searches past
   sessions before answering, and records the session itself with `remember`
@@ -107,7 +107,10 @@ About `desktop-install`:
   macOS only; on Windows, quit the app from the tray first. The config is
   `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS
   and `%APPDATA%\Claude\claude_desktop_config.json` on Windows.
-- The server is named `starmem`. The app refuses a local server whose name
+- Run it in Terminal. From a session inside the Claude app, such as Claude
+  Code in the app's Code tab, it refuses and changes nothing, because it would
+  have to quit the app that session runs in.
+- The server is named `starmemserver`. The app refuses a local server whose name
   collides with one it reserves for its own tools, and it does not publish the
   list; it refused `cowork-episodic-memory`. If it reports a collision, run
   `desktop-install --name <another name>`, which also removes the refused entry.
@@ -115,9 +118,12 @@ About `desktop-install`:
   overwritten, unless you add `--replace`.
 - Each run leaves a backup of the config beside it, which holds the same
   credentials as the config. Delete the backups once the app works.
-- The entry runs a small launcher in `~/.config/starmemory/desktop/` that starts
-  the newest copy Claude Code has installed, so plugin updates reach Cowork
-  without running `desktop-install` again.
+- The entry runs a small launcher in `~/.config/starmemory/desktop/`, which a
+  newer plugin replaces, from the app's next start. The launcher starts the
+  newest copy of starmemory Claude Code has installed from the same
+  marketplace, so plugin updates reach Cowork without running `desktop-install`
+  again. It prefers a copy whose dependencies are already installed, even an
+  older one, so the app does not wait on npm install.
 - `STARMEMORY_*` settings, `CLAUDE_CONFIG_DIR` and `CODEX_HOME` set in the
   shell that runs it are copied into the app's entry, so the app's server and
   Claude Code's share one store. Run it again after changing them.
@@ -241,6 +247,7 @@ session with the hook. The Codex integration is exercised against a fake
 `app-server` in tests and has not yet been run inside a real Codex session.
 The Cowork support is exercised in tests end to end over MCP and against
 desktop configs in a temporary home; it has not yet been run against a real
-Claude desktop app, so whether the app accepts the name `starmem` is untested.
+Claude desktop app, so whether the app accepts the name `starmemserver` is
+untested.
 
 Design notes live outside the repo, in Chinese; ask if you want them.

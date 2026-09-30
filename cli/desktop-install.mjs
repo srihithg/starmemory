@@ -16,11 +16,12 @@
 // Plain node, node: imports only: this runs from a fresh plugin copy, before
 // its dependencies are installed.
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { LAUNCH_CONFIG, MIN_NODE_MAJOR, resolvePluginRoot } from './desktop-launch.mjs';
+import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot, startableCopies } from './desktop-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,7 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
  * one it reserves for its own tools, and does not publish the list: it refused
  * "cowork-episodic-memory" and accepted "episode-archive". So the default
  * steers clear of "cowork", "claude" and "memory"; --name picks another. */
-export const DEFAULT_SERVER_NAME = 'starmem';
+export const DEFAULT_SERVER_NAME = 'starmemserver';
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export const USAGE = `Usage: starmemory desktop-install [--name <name>] [--replace] [--restart] [--config <file>] [--no-prepare]
@@ -41,7 +42,8 @@ can search, read, remember and forget.
   --replace       let --name take over an entry of that name that is not starmemory's
   --restart       quit the Claude app, make the change, and open it again (macOS)
   --config <file> edit this config file instead of the app's own
-  --no-prepare    do not install starmemory's dependencies now; the first launch does`;
+  --no-prepare    do not install starmemory's dependencies now; the app starts a copy that has
+                  them, or installs them at its first launch`;
 
 export class UsageError extends Error {}
 export class InvalidConfigError extends Error {}
@@ -166,30 +168,56 @@ export function withServer(config, name, entry, launcher) {
   return { config: { ...config, mcpServers: servers }, replaced };
 }
 
-function isInside(child, parent) {
-  const real = (p) => {
-    try {
-      return fs.realpathSync(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const relative = path.relative(real(parent), real(child));
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+/** What the launcher is told about the copy at `root`. When Claude Code
+ * installed it, the launcher follows that plugin's later installs, and only
+ * that plugin's: starmemory from the same marketplace. A checkout elsewhere is
+ * used as it is. */
+export function launchConfig({ root, pluginsDir }) {
+  const marketplace = marketplaceOf(root, pluginsDir);
+  const follow = marketplace ? { follow: true, plugin: `starmemory@${marketplace}`, marketplace } : { follow: false };
+  return { root, pluginsDir, ...follow, launcherVersion: LAUNCHER_VERSION };
 }
 
-/** Copy the launcher and the node-finding shim into `dir`, and record where
- * this copy is. Rewritten on every run, so running this again brings a newer
- * launcher along. The launcher follows Claude Code's installs when this copy is
- * one of them; a checkout elsewhere is used as it is. */
-export function installLauncher(dir, { root, pluginsDir }) {
+/** Copy the launcher and the node-finding shim into `dir`, and record `launch`
+ * beside them. Rewritten on every run, so running this again brings a newer
+ * launcher along. Each file is replaced whole, so an app starting meanwhile
+ * runs the old launcher or the new one, and launch.json goes last, since its
+ * launcherVersion speaks for the files beside it. */
+export function installLauncher(dir, launch) {
   fs.mkdirSync(dir, { recursive: true });
   const launcher = path.join(dir, 'launch.mjs');
-  fs.copyFileSync(path.join(here, 'desktop-launch.mjs'), launcher);
-  fs.copyFileSync(path.join(here, 'run-node.sh'), path.join(dir, 'run-node.sh'));
-  const follow = isInside(root, pluginsDir);
-  fs.writeFileSync(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify({ root, pluginsDir, follow }, null, 2)}\n`);
-  return { launcher, follow };
+  for (const [from, to] of [['desktop-launch.mjs', launcher], ['run-node.sh', path.join(dir, 'run-node.sh')]]) {
+    const source = path.join(here, from);
+    replaceFile(to, fs.readFileSync(source), fs.statSync(source).mode & 0o777);
+  }
+  replaceFile(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`, 0o644);
+  return launcher;
+}
+
+/** Replace the launcher the Claude app started this process from with this
+ * copy's, when launch.json records an older one or none: desktop-install is
+ * the only other thing that copies it. The launcher running now is loaded
+ * already, so the new one runs from the app's next start. A launch.json from
+ * before the marketplace was recorded is pinned as desktop-install pins one
+ * now. Writes only in the launcher's folder, and nothing unless the launcher
+ * started this process. True when it replaced the launcher. */
+export function refreshLauncher({ env = process.env, script = process.argv[1] } = {}) {
+  const dir = launcherDir(env);
+  if (script === undefined || !sameFile(script, path.join(dir, 'launch.mjs'))) return false;
+  let launch;
+  try {
+    launch = JSON.parse(fs.readFileSync(path.join(dir, LAUNCH_CONFIG), 'utf8'));
+  } catch {
+    return false; // the launcher cannot have started anything without it
+  }
+  // A newer one stays: the launcher can start an older copy, a prepared one.
+  if (typeof launch?.root !== 'string' || launch.launcherVersion >= LAUNCHER_VERSION) return false;
+  const current =
+    launch.follow && !launch.marketplace && launch.pluginsDir
+      ? launchConfig({ root: launch.root, pluginsDir: launch.pluginsDir })
+      : { ...launch, launcherVersion: LAUNCHER_VERSION };
+  installLauncher(dir, current);
+  return true;
 }
 
 function stamp(date) {
@@ -209,10 +237,35 @@ export function backupConfig(file, now = new Date()) {
   }
 }
 
+/** `contents` into `file` with `mode`, written beside it and renamed in, so no
+ * one reads half a file. The file beside it has a name no one can guess, and
+ * is created new, never opened through a link or a file already there. */
+function replaceFile(file, contents, mode, token = randomBytes(8).toString('hex')) {
+  const temp = `${file}.starmemory-${token}.tmp`;
+  // Throws, touching nothing, when anything is at that name already.
+  const fd = fs.openSync(temp, 'wx', mode);
+  try {
+    try {
+      fs.writeFileSync(fd, contents);
+      try {
+        fs.fchmodSync(fd, mode); // the umask can have narrowed it
+      } catch {
+        // a file system without modes
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
+}
+
 /** Written beside and renamed in, keeping the file's mode, so the app never
  * reads half a file. A config that is a link, into a dotfiles folder say, is
  * written where the link points, so the link stays one. */
-export function writeConfig(configPath, config) {
+export function writeConfig(configPath, config, token) {
   let file = configPath;
   try {
     file = fs.realpathSync(configPath);
@@ -225,19 +278,13 @@ export function writeConfig(configPath, config) {
     }
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.starmemory-${process.pid}.tmp`;
+  let mode = 0o600;
   try {
-    fs.writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-    try {
-      fs.chmodSync(temp, fs.statSync(file).mode & 0o777);
-    } catch {
-      // no config yet: 0600, since it will hold credentials sooner or later
-    }
-    fs.renameSync(temp, file);
-  } catch (error) {
-    fs.rmSync(temp, { force: true });
-    throw error;
+    mode = fs.statSync(file).mode & 0o777;
+  } catch {
+    // no config yet: 0600, since it will hold credentials sooner or later
   }
+  replaceFile(file, `${JSON.stringify(config, null, 2)}\n`, mode, token);
 }
 
 /** Claude Code started by the Claude app itself, in its Code tab or as its
@@ -256,8 +303,14 @@ const WINDOWS_APP_PROCESS =
 /** true or false, or undefined where this cannot tell. */
 export function claudeAppRunning(platform = process.platform) {
   if (platform === 'darwin') {
-    const r = spawnSync('pgrep', ['-x', 'Claude'], { stdio: 'ignore' });
-    return r.error ? undefined : r.status === 0;
+    // -a: pgrep leaves out its own ancestors otherwise, and from a session the
+    // app runs, the app is one of them. -U: another account's app, under fast
+    // user switching, neither reads this account's config nor quits for it.
+    const uid = process.getuid?.();
+    if (uid === undefined) return undefined;
+    const r = spawnSync('pgrep', ['-a', '-U', String(uid), '-x', 'Claude'], { stdio: 'ignore' });
+    // 0 is a match and 1 none. Anything else is pgrep failing.
+    return r.error || (r.status !== 0 && r.status !== 1) ? undefined : r.status === 0;
   }
   if (platform === 'win32') {
     const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_APP_PROCESS], {
@@ -315,8 +368,8 @@ function openClaudeApp() {
   return spawnSync('open', ['-a', 'Claude'], { stdio: 'ignore' }).status === 0;
 }
 
-/** The node the app will get: the shim run the way the app runs it, with a bare
- * PATH, asked for its version. */
+/** The node the app will get: the shim in `dir` run the way the app runs it,
+ * with a bare PATH, asked for its version. */
 export function nodeTheAppFinds(dir, { env = process.env, platform = process.platform } = {}) {
   if (platform === 'win32') return { version: process.version, path: process.execPath };
   const r = spawnSync('/bin/sh', [path.join(dir, 'run-node.sh'), '-e', 'process.stdout.write(process.version + " " + process.execPath)'], {
@@ -388,17 +441,20 @@ export async function main(argv, deps = {}) {
 
   // Only the app's own config can be overwritten by the running app; a file
   // named with --config elsewhere, a test's for one, is not its to touch.
-  const running = sameFile(configFile, appConfig, platform) ? appRunning() : false;
+  const appsOwn = sameFile(configFile, appConfig, platform);
+  // From inside the app, the app is running whatever the check below makes of
+  // it, and quitting it would end the session asking.
+  if (insideClaudeApp(env) && (opts.restart || appsOwn)) {
+    err("starmemory: this runs inside the Claude app. It changes the app's config only while the app is closed, and quitting the app would end this session, so nothing was changed. Run the same command in Terminal instead.");
+    return 1;
+  }
+  const running = appsOwn ? appRunning() : false;
   if (running === undefined && (platform === 'darwin' || platform === 'win32')) {
     err(
       'starmemory: could not tell whether the Claude app is running' +
         (opts.restart ? ', so --restart is not applied' : '') +
         '. If it is, quit it and run this again: it can overwrite a config changed while it is open.'
     );
-  }
-  if (running && opts.restart && insideClaudeApp(env)) {
-    err('starmemory: this runs inside the Claude app, and quitting the app would end this session. Run the same command in Terminal instead.');
-    return 1;
   }
   if (running && opts.restart && platform !== 'darwin') {
     err('starmemory: --restart works on macOS only. Quit the Claude app from the system tray, run this again without --restart, then open the app.');
@@ -411,33 +467,35 @@ export async function main(argv, deps = {}) {
   }
 
   const root = path.resolve(here, '..');
-  const pluginsDir = pluginsDirOf(env);
-  const { launcher, follow } = installLauncher(dir, { root, pluginsDir });
-  const serverRoot = resolvePluginRoot({ root, pluginsDir, follow });
-  const node = nodeTheAppFinds(dir, { env, platform });
+  const launch = launchConfig({ root, pluginsDir: pluginsDirOf(env) });
+  // The shim beside this file, which is the one installLauncher copies.
+  const node = nodeTheAppFinds(here, { env, platform });
 
-  if (opts.prepare && serverRoot) {
-    const ready = await prepare(serverRoot);
-    if (!ready) err('starmemory: its dependencies could not be installed now (see above); the app\'s first launch tries again.');
-  }
+  // The newest copy is the one to prepare. The launcher starts a prepared copy
+  // ahead of it, so which one starts is known only once that is done.
+  const [newest] = startableCopies(launch);
+  const ready = opts.prepare && newest ? await prepare(newest) : true;
+  const serverRoot = resolvePluginRoot(launch);
+  if (!ready) err(`starmemory: its dependencies could not be installed now (see above)${serverRoot === newest ? "; the app's first launch tries again." : '.'}`);
 
+  // Once this has told the app to quit, it opens it again on every way out:
+  // a quit that did not finish in time, a refusal or a failed write among
+  // them. Opening an app still running only brings it forward.
   let quit = false;
-  if (running && opts.restart) {
-    out('starmemory: quitting the Claude app...');
-    if (!quitApp()) {
-      err('starmemory: the Claude app did not quit, so nothing was changed. Quit it yourself and run this again.');
-      return 1;
-    }
-    quit = true;
-  }
-  // Once this has quit the app, it opens it again on every way out, a
-  // refusal or a failed write among them.
   let reopenTried = false;
   const reopen = () => {
     reopenTried = true;
     return openApp();
   };
   try {
+    if (running && opts.restart) {
+      out('starmemory: quitting the Claude app...');
+      quit = true;
+      if (!quitApp()) {
+        err('starmemory: the Claude app did not quit, so nothing was changed. Quit it yourself and run this again.');
+        return 1;
+      }
+    }
     return finish();
   } finally {
     if (quit && !reopenTried) reopen();
@@ -453,16 +511,24 @@ export async function main(argv, deps = {}) {
       err(`starmemory: ${error.message}`);
       return 1;
     }
-    const taken = opts.replace ? undefined : nameTaken(current.config, opts.name, launcher);
+    const taken = opts.replace ? undefined : nameTaken(current.config, opts.name, launcherPath);
     if (taken) {
       err(`starmemory: ${taken}`);
       return 1;
     }
+    // The first look came before preparing the copy, which can take minutes.
+    // Having quit the app itself, this saw it gone a moment ago.
+    if (appsOwn && !quit && appRunning() === true) {
+      err('starmemory: the Claude app is running now, and it can overwrite changes made to its config while it is open, so nothing was changed.');
+      err(opts.restart ? 'Run this again.' : 'Quit it and run this again, or add --restart to have this quit the app, make the change and open it again.');
+      return 1;
+    }
+    const launcher = installLauncher(dir, launch);
     const entry = serverEntry({ dir, env, platform });
     const { config, replaced } = withServer(current.config, opts.name, entry, launcher);
     const backup = current.exists ? backupConfig(configFile, now) : undefined;
     writeConfig(configFile, config);
-    const reopened = opts.restart && platform === 'darwin' ? reopen() : false;
+    const reopened = quit ? reopen() : false;
 
     out(`starmemory: registered "${opts.name}" with the Claude desktop app.`);
     out(`  config    ${configFile}`);
@@ -470,14 +536,17 @@ export async function main(argv, deps = {}) {
     out(`  launcher  ${launcher}`);
     out(
       `  starts    ${serverRoot ?? 'nothing yet: no runnable copy was found'}` +
-        (follow ? ', or whichever version Claude Code has installed newest at launch' : '')
+        (launch.follow ? `, then at each launch the newest copy of ${launch.plugin} Claude Code has installed, the newest with its dependencies installed first` : '')
     );
+    if (serverRoot !== newest) {
+      out(`  newest    ${newest}, which starts once its dependencies are installed${opts.prepare ? '' : ': run this without --no-prepare to install them'}`);
+    }
     out(nodeLine(node));
     if (entry.env) out(`  settings  ${Object.keys(entry.env).join(', ')}, copied from this shell`);
     if (replaced.length > 0) out(`  replaced  the earlier entry ${replaced.map((n) => `"${n}"`).join(', ')}`);
     out(`  servers   ${Object.keys(config.mcpServers).join(', ')}`);
     out('');
-    out(reopened ? 'Reopened the Claude app.' : 'Next: quit the Claude app completely and open it again.');
+    out(reopened ? 'Reopened the Claude app.' : quit ? 'Next: open the Claude app again.' : 'Next: quit the Claude app completely and open it again.');
     out(`Cowork sessions linked to this computer then have mcp__remote-devices__${opts.name}__search, read, remember and forget.`);
     out('If the app says the name collides with a reserved internal server name, run this again with --name <another name>.');
     return 0;
