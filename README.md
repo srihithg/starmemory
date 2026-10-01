@@ -198,9 +198,10 @@ exchange goes at the next session-start sync rather than at once.
   indexes them, summarises up to ten conversations that have been quiet for
   two hours, deletes forgotten sessions and conversations past the TTL. It
   runs detached, so the session does not wait for it. Its log is
-  `~/.config/starmemory/sync.log`. In a Cowork container, or any other cloud
-  container, it is skipped. A second start-up hook prints a short instruction
-  to use starmemory, once per session.
+  `~/.config/starmemory/sync.log`, which moves to `sync.log.1` once it passes
+  about 1 MB, so the two stay near 2 MB together. In a Cowork container, or
+  any other cloud container, it is skipped. A second start-up hook prints a
+  short instruction to use starmemory, once per session.
 - **`search`**: hybrid by default; `mode: "text"` or `"vector"` for one side
   only; an array of 2-5 concepts for AND matching; filters for project,
   session, harness (`claude`, `codex`, `cowork`) and date range. Each hit
@@ -229,7 +230,7 @@ All optional, all environment variables read by the plugin's processes.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STARMEMORY_TTL_DAYS` | `180` | Conversations quiet for longer are deleted everywhere. `0` disables. |
+| `STARMEMORY_TTL_DAYS` | `180` | Conversations quiet for longer are deleted everywhere, and so are archive copies of transcripts that never had a whole exchange. `0` disables. |
 | `STARMEMORY_SUMMARY_LIMIT` | `10` | Summaries written per sync. `0`, or any value that is not a number such as `off`, turns summaries off. |
 | `STARMEMORY_SUMMARY_MODEL` | `haiku` | Model for Claude Code conversation summaries (`sonnet` is the fallback). |
 | `STARMEMORY_DB_PATH`, `STARMEMORY_INDEX_PATH`, `STARMEMORY_TEXT_INDEX_PATH`, `STARMEMORY_ARCHIVE_PATH`, `STARMEMORY_MODEL_CACHE_PATH`, `STARMEMORY_LOG_PATH`, `STARMEMORY_COWORK_PATH`, `STARMEMORY_FORGOTTEN_PATH` | under `~/.config/starmemory` | Where things live. The model cache (`models/`) is shared by every installed version, so a plugin update does not download the 160 MB embedding model again. |

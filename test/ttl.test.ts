@@ -134,6 +134,64 @@ describe('expireOldConversations', () => {
     expect(holder.numDocs()).toBe(2);
   });
 
+  it('expires a copy no row points at by its own age, with its summary, and leaves the rest', () => {
+    const kept = conversation('kept', 10);
+    const copyAged = (name: string, ageDays: number) => {
+      const copy = archivePathFor(archiveRoot, 'claude', 'proj', `/src/proj/${name}.jsonl`);
+      fs.mkdirSync(path.dirname(copy), { recursive: true });
+      fs.writeFileSync(copy, 'gz bytes');
+      writeSummary(summaryPathFor(copy), '');
+      const then = new Date(now - ageDays * DAY);
+      fs.utimesSync(copy, then, then);
+      return copy;
+    };
+    // A transcript that never had a whole exchange: a prompt and no reply.
+    const lonely = copyAged('lonely', 200);
+    const recent = copyAged('recent', 20);
+
+    const result = expireOldConversations(store, undefined, { ttlDays: 180, now, archiveRoot });
+
+    expect(result).toEqual({ rows: 0, files: 1, skipped: false });
+    expect(fs.existsSync(lonely)).toBe(false);
+    expect(fs.existsSync(summaryPathFor(lonely))).toBe(false);
+    expect(fs.existsSync(recent)).toBe(true);
+    expect(fs.existsSync(kept.copy)).toBe(true);
+    expect(exchangesFrom(store, 0).map((e) => e.id)).toEqual(kept.ids);
+    expect(expireOldConversations(store, undefined, { ttlDays: 0, now: now + 400 * DAY, archiveRoot }).files).toBe(0);
+    expect(fs.existsSync(recent)).toBe(true);
+  });
+
+  it('sweeps a partial copy a crashed sync left once it is a day old, whatever the TTL', () => {
+    const dirOf = path.join(archiveRoot, 'claude', 'proj');
+    fs.mkdirSync(dirOf, { recursive: true });
+    const partial = path.join(dirOf, 's1.jsonl.gz.4242.0.tmp');
+    const notOurs = path.join(dirOf, 'notes.tmp');
+    for (const file of [partial, notOurs]) fs.writeFileSync(file, 'half');
+
+    expireOldConversations(store, undefined, { ttlDays: 0, now: Date.now(), archiveRoot });
+    expect(fs.existsSync(partial)).toBe(true);
+
+    expireOldConversations(store, undefined, { ttlDays: 0, now: Date.now() + 2 * DAY, archiveRoot });
+    expect(fs.existsSync(partial)).toBe(false);
+    expect(fs.existsSync(notOurs)).toBe(true);
+  });
+
+  it('follows no link out of the archive when it looks for copies', () => {
+    if (process.platform === 'win32') return; // symlinks need a privilege there
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(outside, { recursive: true });
+    const theirs = path.join(outside, 'old.jsonl.gz');
+    fs.writeFileSync(theirs, 'not ours');
+    const then = new Date(now - 400 * DAY);
+    fs.utimesSync(theirs, then, then);
+    fs.mkdirSync(path.join(archiveRoot, 'claude'), { recursive: true });
+    fs.symlinkSync(outside, path.join(archiveRoot, 'claude', 'linked'));
+
+    expireOldConversations(store, undefined, { ttlDays: 180, now, archiveRoot });
+
+    expect(fs.existsSync(theirs)).toBe(true);
+  });
+
   it('uses the Codex conversation project and harness to find its files', () => {
     const c = conversation('rollout-1', 200, 1, { harness: 'codex' });
     expect(c.copy).toContain(path.join('archive', 'codex', 'proj'));

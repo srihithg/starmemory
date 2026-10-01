@@ -1,7 +1,9 @@
 // sync.log, which the session-start hook's detached sync writes to. It names
 // projects and sessions, so it is owner-only like everything else starmemory
-// keeps. Run through a copy of cli/ whose dist/cli.js is a stand-in, so no real
-// sync starts. Every path is in a temp dir.
+// keeps, and it is capped, as every session start adds to it. Run through a
+// copy of cli/ whose dist/cli.js is a stand-in, so no real sync starts, and
+// skipped on Windows, where linking the copy's node_modules needs a privilege.
+// Every path is in a temp dir.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -58,5 +60,34 @@ describe.skipIf(process.platform === 'win32')('sync.log', () => {
 
     expect(fs.statSync(log).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(log, 'utf8').match(/starting detached sync/g)).toHaveLength(2);
+  }, 60_000);
+});
+
+describe.skipIf(process.platform === 'win32')('sync.log past about 1 MB', () => {
+  it('moves to sync.log.1, replacing the one before, and starts again', async () => {
+    const log = path.join(dir, 'sync.log');
+    const old = `${'x'.repeat(1024 * 1024)}\nlast line of the old log\n`;
+    fs.writeFileSync(log, old);
+    fs.writeFileSync(`${log}.1`, 'the log before that\n');
+    fs.chmodSync(log, 0o644);
+
+    expect(backgroundSync(log).status).toBe(0);
+    await waitFor(started);
+
+    expect(fs.readFileSync(`${log}.1`, 'utf8')).toBe(old);
+    expect(fs.readFileSync(log, 'utf8')).toMatch(/^\[[^\]]+\] pid \d+: starting detached sync\n$/);
+    expect(fs.statSync(`${log}.1`).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(log).mode & 0o777).toBe(0o600);
+  }, 60_000);
+
+  it('stays where it is while it is smaller', async () => {
+    const log = path.join(dir, 'sync.log');
+    fs.writeFileSync(log, 'a short log\n');
+
+    expect(backgroundSync(log).status).toBe(0);
+    await waitFor(started);
+
+    expect(fs.existsSync(`${log}.1`)).toBe(false);
+    expect(fs.readFileSync(log, 'utf8')).toMatch(/^a short log\n\[/);
   }, 60_000);
 });

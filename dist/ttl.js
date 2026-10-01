@@ -2,8 +2,11 @@
 // STARMEMORY_TTL_DAYS (180 by default), it leaves the memory for good. The
 // rows and vector in LMDB, its documents in the text index, the archive copy
 // and the summary all go together, so a search never returns something that
-// cannot be opened. Design doc archive-and-summaries §13.
+// cannot be opened. A copy no row points at, of a transcript that never had a
+// whole exchange, goes by its own age, and a partial copy a crashed sync left
+// goes after a day. Design doc archive-and-summaries §13.
 import fs from 'node:fs';
+import path from 'node:path';
 import { ARCHIVE_SUFFIX, archivePathFor, summaryPathFor } from './archive.js';
 import { deleteExchanges, exchangesFrom } from './store.js';
 export const DEFAULT_TTL_DAYS = 180;
@@ -95,15 +98,86 @@ export function removeConversations(store, textIndex, groups, { archiveRoot, log
     }
     return result;
 }
-/** Remove every conversation whose last activity is older than the TTL. */
+/** The files in the archive's <harness>/<project>/ folders whose names
+ * `wanted` picks. Only real folders and plain files: a link is never followed. */
+function archiveFiles(archiveRoot, wanted) {
+    const entries = (dir) => {
+        try {
+            return fs.readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return [];
+        }
+    };
+    const found = [];
+    for (const harness of entries(archiveRoot).filter((e) => e.isDirectory())) {
+        for (const project of entries(path.join(archiveRoot, harness.name)).filter((e) => e.isDirectory())) {
+            const dir = path.join(archiveRoot, harness.name, project.name);
+            for (const file of entries(dir))
+                if (file.isFile() && wanted(file.name))
+                    found.push(path.join(dir, file.name));
+        }
+    }
+    return found;
+}
+/** A copy copyIfChanged was writing when its sync stopped. */
+const PARTIAL_COPY = /\.jsonl\.gz\.\d+\.\d+\.tmp$/;
+/** Delete the partial copies a crashed sync left, once nothing has touched
+ * them for a day. By the inode's change time, since copyIfChanged gives a
+ * copy its source's mtime just before renaming it in. */
+function sweepPartialCopies(archiveRoot, now, log) {
+    for (const partial of archiveFiles(archiveRoot, (name) => PARTIAL_COPY.test(name))) {
+        try {
+            const { ctimeMs, mtimeMs } = fs.lstatSync(partial);
+            if (now - Math.max(ctimeMs, mtimeMs) < DAY_MS)
+                continue;
+            fs.rmSync(partial, { force: true });
+            log(`starmemory: deleted ${partial}, a partial copy a sync left a day or more ago`);
+        }
+        catch {
+            // gone already
+        }
+    }
+}
+/** Delete, with its summary, every archive copy that no row points at and
+ * whose own mtime, the transcript's last write, is past the TTL: a transcript
+ * that never had a whole exchange has no rows, so nothing else ever would. */
+function expireUnreferencedCopies(groups, { archiveRoot, cutoff, ttlDays, log }) {
+    const referenced = new Set(groups.flatMap((g) => [g.archivePath, archivePathFor(archiveRoot, g.harness, g.project, g.archivePath)].map((p) => path.resolve(p))));
+    let removed = 0;
+    for (const copy of archiveFiles(archiveRoot, (name) => name.endsWith(`.jsonl${ARCHIVE_SUFFIX}`))) {
+        if (referenced.has(path.resolve(copy)))
+            continue;
+        try {
+            if (fs.lstatSync(copy).mtimeMs >= cutoff)
+                continue;
+            for (const file of [copy, summaryPathFor(copy)])
+                fs.rmSync(file, { force: true });
+        }
+        catch {
+            continue;
+        }
+        removed++;
+        log(`starmemory: expired ${copy} (no exchanges, quiet for more than ${ttlDays} days)`);
+    }
+    return removed;
+}
+/** Remove every conversation whose last activity is older than the TTL, and
+ * the archive files nothing keeps: copies no row points at, past the TTL by
+ * their own age, and partial copies a crashed sync left, whatever the TTL. */
 export function expireOldConversations(store, textIndex, { ttlDays = defaultTtlDays(), now = Date.now(), archiveRoot, log = () => { } }) {
+    sweepPartialCopies(archiveRoot, now, log);
     if (ttlDays <= 0)
         return { rows: 0, files: 0, skipped: false };
     const cutoff = ttlCutoffMs(ttlDays, now);
-    const expired = groupByFile(exchangesFrom(store, 0)).filter((g) => lastActivityMs(g, archiveRoot) < cutoff);
-    return removeConversations(store, textIndex, expired, {
+    const groups = groupByFile(exchangesFrom(store, 0));
+    const expired = groups.filter((g) => lastActivityMs(g, archiveRoot) < cutoff);
+    const result = removeConversations(store, textIndex, expired, {
         archiveRoot,
         log,
         describe: (g) => `expired ${g.archivePath} (${g.ids.length} exchanges, quiet for more than ${ttlDays} days)`,
     });
+    // No text-index documents to go with these, so no writer is needed.
+    result.files += expireUnreferencedCopies(groups, { archiveRoot, cutoff, ttlDays, log });
+    return result;
 }

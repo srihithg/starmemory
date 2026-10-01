@@ -43,14 +43,34 @@ export function syncLogPath() {
   return process.env.STARMEMORY_LOG_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'sync.log');
 }
 
-if (background && !detached) {
-  const log = syncLogPath();
+/** Past this, sync.log moves to sync.log.1, replacing the one before, so the
+ * two together stay near twice this. */
+export const LOG_MAX_BYTES = 1024 * 1024;
+
+function openLog(log) {
   fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
   const fd = fs.openSync(log, 'a', 0o600);
   try {
     fs.fchmodSync(fd, 0o600); // a log an earlier version made readable to all
   } catch {
     // a file system without modes, or not a file of this account's
+  }
+  return fd;
+}
+
+if (background && !detached) {
+  const log = syncLogPath();
+  let fd = openLog(log);
+  try {
+    if (fs.fstatSync(fd).size >= LOG_MAX_BYTES) {
+      // Renamed while open, so the old log keeps the owner-only mode just set.
+      fs.renameSync(log, `${log}.1`);
+      const fresh = openLog(log);
+      fs.closeSync(fd);
+      fd = fresh;
+    }
+  } catch {
+    // keep writing to the log as it is
   }
   fs.writeSync(fd, `[${new Date().toISOString()}] pid ${process.pid}: starting detached sync\n`);
   const child = spawn(
