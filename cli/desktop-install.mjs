@@ -26,9 +26,9 @@ import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolve
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** Not "starmemory". The app refuses a local server whose name collides with
- * one it reserves for its own tools, and does not publish the list: it refused
- * "cowork-episodic-memory" and accepted "episode-archive". So the default
- * steers clear of "cowork", "claude" and "memory"; --name picks another. */
+ * one it reserves for its own tools, and does not publish the list: an earlier
+ * server name was refused as reserved. So the default steers clear of
+ * "cowork", "claude" and "memory"; --name picks another. */
 export const DEFAULT_SERVER_NAME = 'starmemserver';
 const SERVER_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 

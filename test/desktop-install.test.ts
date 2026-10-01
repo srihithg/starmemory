@@ -49,7 +49,7 @@ afterEach(() => {
 
 const existingConfig = {
   mcpServers: {
-    'byoc-admin': { command: '/usr/local/bin/byoc', args: ['serve'], env: { BYOC_TOKEN: SECRET } },
+    'other-server': { command: '/usr/local/bin/other-tool', args: ['serve'], env: { OTHER_TOKEN: SECRET } },
   },
   preferences: { sidebarMode: 'chat' },
 };
@@ -85,9 +85,9 @@ describe('desktop-install', () => {
 
     expect(status).toBe(0);
     const config = readConfig();
-    expect(config.mcpServers['byoc-admin']).toEqual(existingConfig.mcpServers['byoc-admin']);
+    expect(config.mcpServers['other-server']).toEqual(existingConfig.mcpServers['other-server']);
     expect(config.preferences).toEqual(existingConfig.preferences);
-    expect(Object.keys(config.mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+    expect(Object.keys(config.mcpServers)).toEqual(['other-server', DEFAULT_SERVER_NAME]);
     const entry = config.mcpServers[DEFAULT_SERVER_NAME];
     for (const file of [entry.command, ...entry.args]) {
       expect(path.isAbsolute(file)).toBe(true);
@@ -96,9 +96,9 @@ describe('desktop-install', () => {
     expect(entry.args.at(-1)).toBe(path.join(launcherDir(env), 'launch.mjs'));
     expect(backups()).toHaveLength(1);
     expect(fs.readFileSync(path.join(path.dirname(configFile), backups()[0]))).toEqual(original);
-    expect(output).toContain(`servers   byoc-admin, ${DEFAULT_SERVER_NAME}`);
+    expect(output).toContain(`servers   other-server, ${DEFAULT_SERVER_NAME}`);
     expect(output).not.toContain(SECRET);
-    expect(output).not.toContain('BYOC_TOKEN');
+    expect(output).not.toContain('OTHER_TOKEN');
     expect(output).toContain('quit the Claude app completely and open it again');
     expect(output).toContain('which holds the same credentials as the config');
   });
@@ -137,7 +137,7 @@ describe('desktop-install', () => {
     const { status, output } = install(['--name', 'star-recall']);
 
     expect(status).toBe(0);
-    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', 'star-recall']);
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['other-server', 'star-recall']);
     expect(output).toContain(`replaced  the earlier entry "${DEFAULT_SERVER_NAME}"`);
     expect(output).toContain('mcp__remote-devices__star-recall__search');
     expect(backups()).toHaveLength(2);
@@ -151,8 +151,8 @@ describe('desktop-install', () => {
 
     expect(status).toBe(0);
     expect(DEFAULT_SERVER_NAME).toBe('starmemserver');
-    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', 'starmemserver']);
-    expect(readConfig().mcpServers['byoc-admin']).toEqual(existingConfig.mcpServers['byoc-admin']);
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['other-server', 'starmemserver']);
+    expect(readConfig().mcpServers['other-server']).toEqual(existingConfig.mcpServers['other-server']);
     expect(output).toContain('replaced  the earlier entry "starmem"');
     expect(output).toContain('mcp__remote-devices__starmemserver__search');
   });
@@ -160,19 +160,19 @@ describe('desktop-install', () => {
   it('refuses a --name another server already goes by, and takes it over only with --replace', () => {
     writeConfig(existingConfig);
 
-    const refused = install(['--name', 'byoc-admin']);
+    const refused = install(['--name', 'other-server']);
 
     expect(refused.status).toBe(1);
-    expect(refused.output).toContain('already has a server named "byoc-admin" that is not starmemory\'s');
+    expect(refused.output).toContain('already has a server named "other-server" that is not starmemory\'s');
     expect(readConfig()).toEqual(existingConfig);
     expect(backups()).toEqual([]);
 
-    const replaced = install(['--name', 'byoc-admin', '--replace']);
+    const replaced = install(['--name', 'other-server', '--replace']);
 
     expect(replaced.status).toBe(0);
-    expect(readConfig().mcpServers['byoc-admin'].args.at(-1)).toBe(path.join(launcherDir(env), 'launch.mjs'));
+    expect(readConfig().mcpServers['other-server'].args.at(-1)).toBe(path.join(launcherDir(env), 'launch.mjs'));
     // Running it again under the same name is ours to overwrite, no flag needed.
-    expect(install(['--name', 'byoc-admin']).status).toBe(0);
+    expect(install(['--name', 'other-server']).status).toBe(0);
   });
 
   it('writes through a config that is a link, so the link stays one', () => {
@@ -186,7 +186,7 @@ describe('desktop-install', () => {
     expect(install().status).toBe(0);
 
     expect(fs.lstatSync(configFile).isSymbolicLink()).toBe(true);
-    expect(Object.keys(JSON.parse(fs.readFileSync(target, 'utf8')).mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+    expect(Object.keys(JSON.parse(fs.readFileSync(target, 'utf8')).mcpServers)).toEqual(['other-server', DEFAULT_SERVER_NAME]);
   });
 
   it('writes where a link points even when there is no config there yet', () => {
@@ -460,7 +460,7 @@ describe('desktop-install while the Claude app is running', () => {
     const code = await main(['--no-prepare', '--config', configFile], { ...quiet, env: inside, platform: 'darwin', appRunning: () => true, appConfig: path.join(dir, 'the-apps-own.json') });
 
     expect(code).toBe(0);
-    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['other-server', DEFAULT_SERVER_NAME]);
   });
 
   it('looks again just before writing, after preparing the copy, and changes nothing if the app was opened meanwhile', async () => {
@@ -507,7 +507,7 @@ describe('desktop-install while the Claude app is running', () => {
       expect(code).toBe(0);
       expect(events).toEqual([]);
       expect(said.join('\n')).not.toContain('Reopened');
-      expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+      expect(Object.keys(readConfig().mcpServers)).toEqual(['other-server', DEFAULT_SERVER_NAME]);
     }
   });
 
@@ -578,7 +578,7 @@ describe('desktop-install while the Claude app is running', () => {
     const code = await main(['--no-prepare', '--config', configFile], { ...quiet, env, appRunning: () => true, appConfig: path.join(dir, 'the-apps-own.json') });
 
     expect(code).toBe(0);
-    expect(Object.keys(readConfig().mcpServers)).toEqual(['byoc-admin', DEFAULT_SERVER_NAME]);
+    expect(Object.keys(readConfig().mcpServers)).toEqual(['other-server', DEFAULT_SERVER_NAME]);
   });
 });
 

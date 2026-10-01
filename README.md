@@ -112,8 +112,9 @@ About `desktop-install`:
   have to quit the app that session runs in.
 - The server is named `starmemserver`. The app refuses a local server whose name
   collides with one it reserves for its own tools, and it does not publish the
-  list; it refused `cowork-episodic-memory`. If it reports a collision, run
-  `desktop-install --name <another name>`, which also removes the refused entry.
+  list. An earlier server name was refused as reserved. If it reports a
+  collision, run `desktop-install --name <another name>`, which also removes
+  the refused entry.
   A name another server in the config already has is refused rather than
   overwritten, unless you add `--replace`.
 - Each run leaves a backup of the config beside it, which holds the same
