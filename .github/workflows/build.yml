@@ -1,6 +1,10 @@
 # Build the native addon and run both test suites on every platform a release
-# ships for, and attach the four binaries to the release when a v* tag is pushed.
+# ships for. A v* tag also creates a draft release with the four binaries, their
+# SHA256SUMS and provenance attestations, which a maintainer checks and then
+# publishes (SECURITY.md).
 # Design doc windows-support §05.
+#
+# Every action is pinned to a full commit sha, with its tag in the comment.
 name: build
 
 on:
@@ -9,8 +13,9 @@ on:
     tags: ['v*']
   pull_request:
 
+# Read-only unless a job asks for more, and only the release job does.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -25,41 +30,75 @@ jobs:
           - { os: ubuntu-22.04-arm,  tag: linux-arm64 }
           - { os: windows-2022,      tag: win32-x64 }
     steps:
-      - uses: actions/checkout@v4
+      # Nothing after checkout pushes, so the token is not left in .git/config
+      # for dependency code and tests to find.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The action has no release tags: this is the master commit its stable
+      # branch is built from. A fixed toolchain means a new Rust release cannot
+      # change what a tag builds.
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master, 2026-09-03
+        with:
+          toolchain: 1.98.1
 
-      - uses: Swatinem/rust-cache@v2
+      # No cache is restored into a tag build, so a cache written by a branch
+      # build cannot reach the binaries a release ships.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           workspaces: native
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       # The embedding model (~160 MB) is downloaded by the first test that
       # needs it; keep it between runs.
       - name: Cache the embedding model
-        uses: actions/cache@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: node_modules/@huggingface/transformers/.cache
           key: transformers-cache-${{ runner.os }}-${{ hashFiles('src/embeddings.ts') }}
 
-      - run: npm ci
+      # Like bootstrap.mjs's first-run install, this runs no dependency's
+      # install script, so the suite tests the same install users get.
+      - run: npm ci --ignore-scripts
 
+      # --locked fails the build when Cargo.lock is out of date instead of
+      # resolving new versions. build-native.mjs then finds the library built
+      # and copies it into place.
       - name: Build the native addon for this platform
-        run: npm run build:native
+        run: |
+          cargo build --release --locked --manifest-path native/Cargo.toml
+          npm run build:native
         shell: bash
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --locked
         working-directory: native
+
+      - name: Build dist/ from src/
+        run: npx tsc -p tsconfig.json
+        shell: bash
+
+      # A marketplace install runs the committed dist/, never src/, so the two
+      # must agree. tsc output is the same everywhere, so one platform checks.
+      - name: Check the committed dist/ matches src/
+        if: matrix.tag == 'linux-x64'
+        run: |
+          git diff --exit-code -- dist || { echo "::error::dist/ is out of date. Run npx tsc -p tsconfig.json and commit dist/."; exit 1; }
+          untracked=$(git ls-files --others --exclude-standard -- dist)
+          if [ -n "$untracked" ]; then echo "::error::dist/ has files that are not committed: $untracked"; exit 1; fi
+        shell: bash
 
       # vitest runs test files in parallel workers; on Windows two workers
       # writing the same model file into the cache collide (EPERM on rename).
       # Fetch it once, single-threaded, before the suite starts.
       - name: Warm the embedding model cache
-        run: npx tsc -p tsconfig.json && node -e "import('./dist/embeddings.js').then(m => m.initEmbeddings())"
+        run: node -e "import('./dist/embeddings.js').then(m => m.initEmbeddings())"
         shell: bash
 
       - name: TypeScript tests
@@ -71,7 +110,7 @@ jobs:
         run: cli\run-node.cmd -e "console.log('launcher ok', process.version)"
         shell: cmd
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: starmemory_native.${{ matrix.tag }}.node
           path: native/starmemory_native.${{ matrix.tag }}.node
@@ -81,17 +120,36 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
+    # Give this environment required reviewers in the repository settings, and
+    # a tag waits for one before anything is attested or released.
+    environment: release
+    permissions:
+      contents: write      # create the draft release
+      id-token: write      # sign the provenance attestations
+      attestations: write  # store them
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: assets
           merge-multiple: true
       # bootstrap.mjs refuses a downloaded addon whose SHA-256 is not listed here.
       - name: Write SHA256SUMS
         run: cd assets && sha256sum starmemory_native.*.node > SHA256SUMS && cat SHA256SUMS
-      - name: Attach the binaries and checksums to the release
-        uses: softprops/action-gh-release@v2
+      # Records that these exact files came from this workflow at this tag, for
+      # `gh attestation verify` (SECURITY.md).
+      - name: Attest the binaries and checksums
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
+          subject-path: |
+            assets/starmemory_native.*.node
+            assets/SHA256SUMS
+      # A draft is not public and its assets cannot be downloaded, so nothing
+      # reaches a user until a maintainer has checked it and published it.
+      - name: Attach the binaries and checksums to a draft release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          draft: true
+          fail_on_unmatched_files: true
           files: |
             assets/starmemory_native.*.node
             assets/SHA256SUMS
