@@ -11,6 +11,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
+  ADDON_CHECKSUMS_PATH,
+  AddonChecksumError,
   addonChecksumsUrl,
   addonDownloadUrl,
   addonRelativePath,
@@ -19,8 +21,11 @@ import {
   findMissingDeps,
   isSupportedPlatform,
   npmInstallArgs,
+  pinnedAddonDigest,
   platformTag,
+  readAddonChecksums,
   unsupportedPlatformMessage,
+  verifyAddonDigest,
 } from './install-check.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -82,28 +87,32 @@ async function fetchOk(fetchImpl, url, what) {
 }
 
 /** Fetch this platform's prebuilt addon from the release matching
- * package.json's version, and refuse it unless its SHA-256 matches the
- * release's SHA256SUMS. This is native code that the MCP server and the hook
- * load into their own process, so a truncated or tampered download must not
- * land. Written beside the target and renamed in: the file is not mapped by
- * anyone yet, so the rename is safe on Windows too. Throws with the URL in
- * the message on any failure, leaving no partial file behind. Design doc
- * windows-support §04. */
-export async function downloadAddon(root, { version, tag = platformTag(), fetchImpl = fetch, log: report = log } = {}) {
+ * package.json's version, and refuse it unless its SHA-256 matches both the
+ * release's SHA256SUMS and, when the repo records one for this version and
+ * platform, native/addon-checksums.json. This is native code that the MCP
+ * server and the hook load into their own process, so a truncated, tampered or
+ * substituted download must not land. Written beside the target and renamed
+ * in: the file is not mapped by anyone yet, so the rename is safe on Windows
+ * too. Throws with the URL in the message on any failure, leaving no partial
+ * file behind. Design doc windows-support §04.
+ *
+ * `warn` stays on when a quiet caller silences `log`: an addon checked against
+ * SHA256SUMS alone says so when it is saved, which is the only time, since it
+ * is never fetched again. */
+export async function downloadAddon(root, { version, tag = platformTag(), fetchImpl = fetch, log: report = log, warn = log } = {}) {
   const url = addonDownloadUrl(version, tag);
   const target = path.join(root, addonRelativePath(tag));
   const fileName = path.basename(target);
+  const pinned = pinnedAddonDigest(readAddonChecksums(root), version, tag);
   report(`starmemory: fetching the ${tag} native addon from ${url} (first run only)...`);
 
   const sums = await (await fetchOk(fetchImpl, addonChecksumsUrl(version), 'the release checksums')).text();
-  const expected = expectedDigest(sums, fileName);
-  if (!expected) throw new Error(`the release's SHA256SUMS has no entry for ${fileName}; not installing an unverifiable binary`);
+  const released = expectedDigest(sums, fileName);
+  if (!released) throw new AddonChecksumError(`the release's SHA256SUMS has no entry for ${fileName}; not installing an unverifiable binary`);
 
   const bytes = Buffer.from(await (await fetchOk(fetchImpl, url, 'the native addon')).arrayBuffer());
   const actual = createHash('sha256').update(bytes).digest('hex');
-  if (actual !== expected) {
-    throw new Error(`the downloaded ${fileName} does not match the release checksum (got ${actual.slice(0, 12)}..., expected ${expected.slice(0, 12)}...); not installing it`);
-  }
+  const pinnedChecked = verifyAddonDigest(actual, { fileName, released, pinned, version, tag });
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const part = `${target}.${process.pid}.part`;
@@ -114,7 +123,12 @@ export async function downloadAddon(root, { version, tag = platformTag(), fetchI
     fs.rmSync(part, { force: true });
     throw error;
   }
-  report(`starmemory: native addon saved to ${target} (sha256 verified)`);
+  if (pinnedChecked) {
+    report(`starmemory: native addon saved to ${target} (sha256 verified against ${ADDON_CHECKSUMS_PATH} and the release's SHA256SUMS)`);
+  } else {
+    warn(`starmemory: ${ADDON_CHECKSUMS_PATH} has no entry for v${version} ${tag} yet, so ${fileName} was checked against the release's SHA256SUMS only`);
+    report(`starmemory: native addon saved to ${target} (sha256 verified against the release's SHA256SUMS)`);
+  }
   return target;
 }
 
@@ -141,7 +155,11 @@ export async function ensureReady({ root = PLUGIN_ROOT, quiet = false } = {}) {
     } catch (error) {
       if (!quiet) {
         log(`starmemory: ${error.message}`);
-        log('starmemory: no network, or no release for this platform yet. To build it yourself: `npm run build` (needs a Rust toolchain).');
+        log(
+          error instanceof AddonChecksumError
+            ? 'starmemory: SECURITY.md says how to report this. To build the addon yourself instead: `npm run build` (needs a Rust toolchain).'
+            : 'starmemory: no network, or no release for this platform yet. To build it yourself: `npm run build` (needs a Rust toolchain).'
+        );
       }
       return false;
     }

@@ -69,6 +69,66 @@ export function expectedDigest(sumsText, fileName) {
   return undefined;
 }
 
+/** Each release's addon hashes as committed to the repo, relative to the plugin
+ * root: `{ "<version>": { "<platform-tag>": "<sha256>" } }`. A release's own
+ * SHA256SUMS shows that a download arrived intact, but whoever can replace a
+ * release asset can replace that file as well. This one changes only by a
+ * commit. SECURITY.md has the release steps that fill it in. */
+export const ADDON_CHECKSUMS_PATH = 'native/addon-checksums.json';
+
+/** A download refused because of its hash, as opposed to one that never arrived. */
+export class AddonChecksumError extends Error {
+  name = 'AddonChecksumError';
+}
+
+const isMap = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** The committed hashes under `root`. A missing file reads as no entries. A
+ * malformed one throws, since ignoring it would quietly fall back to the
+ * release's own SHA256SUMS. */
+export function readAddonChecksums(root) {
+  const file = path.join(root, ADDON_CHECKSUMS_PATH);
+  if (!fs.existsSync(file)) return {};
+  let checksums;
+  try {
+    checksums = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new AddonChecksumError(`${ADDON_CHECKSUMS_PATH} is unreadable (${error.message}); not installing an addon it cannot check`);
+  }
+  const wellFormed =
+    isMap(checksums) &&
+    Object.values(checksums).every((byTag) => isMap(byTag) && Object.values(byTag).every((digest) => typeof digest === 'string' && /^[0-9a-fA-F]{64}$/.test(digest)));
+  if (!wellFormed) {
+    throw new AddonChecksumError(`${ADDON_CHECKSUMS_PATH} must map each version to { "<platform-tag>": "<sha256>" }; not installing an addon it cannot check`);
+  }
+  return checksums;
+}
+
+/** The committed sha256 for `version` on `tag`, or undefined when there is none
+ * yet. A release is tagged before its binaries exist, so its hashes can only
+ * land in a later commit. */
+export function pinnedAddonDigest(checksums, version, tag = platformTag()) {
+  const byTag = Object.hasOwn(checksums, version) ? checksums[version] : undefined;
+  return byTag && Object.hasOwn(byTag, tag) ? byTag[tag].toLowerCase() : undefined;
+}
+
+/** Throw unless a downloaded addon's sha256 (`actual`) matches the release's
+ * SHA256SUMS entry (`released`) and, when the repo has one, the committed entry
+ * (`pinned`). Returns whether the committed entry was checked. */
+export function verifyAddonDigest(actual, { fileName, released, pinned, version, tag }) {
+  if (actual !== released) {
+    throw new AddonChecksumError(`the downloaded ${fileName} does not match the release checksum (got ${actual}, expected ${released}); not installing it`);
+  }
+  if (pinned === undefined) return false;
+  if (actual !== pinned) {
+    throw new AddonChecksumError(
+      `the downloaded ${fileName} does not match the sha256 that ${ADDON_CHECKSUMS_PATH} records for v${version} ${tag} ` +
+        `(got ${actual}, expected ${pinned}). The release asset is not the one this version was published with, so it is not installed.`
+    );
+  }
+  return true;
+}
+
 /** The npm arguments that install the runtime dependencies under `root`.
  *
  * `npm ci` whenever a lockfile is there, so every package is the version and

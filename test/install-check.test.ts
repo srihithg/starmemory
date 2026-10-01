@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error -- plain JS module, no type declarations by design
 import {
+  ADDON_CHECKSUMS_PATH,
+  AddonChecksumError,
   RUNTIME_DEPENDENCIES,
   SUPPORTED_PLATFORMS,
   addonRelativePath,
@@ -14,7 +16,9 @@ import {
   findMissingAddons,
   isSupportedPlatform,
   npmInstallArgs,
+  pinnedAddonDigest,
   platformTag,
+  readAddonChecksums,
   unsupportedPlatformMessage,
 } from '../cli/install-check.mjs';
 
@@ -168,5 +172,52 @@ describe('install scripts in package-lock.json', () => {
       .map(([name]) => name);
 
     expect(withScripts.filter((name) => !WORK_WITHOUT_THEIR_SCRIPTS.includes(name))).toEqual([]);
+  });
+});
+
+describe('readAddonChecksums and pinnedAddonDigest', () => {
+  const digest = 'ab'.repeat(32);
+
+  function writeChecksums(text: string) {
+    fs.mkdirSync(path.join(root, 'native'), { recursive: true });
+    fs.writeFileSync(path.join(root, ADDON_CHECKSUMS_PATH), text);
+  }
+
+  it('read a missing file as no entries', () => {
+    expect(readAddonChecksums(root)).toEqual({});
+  });
+
+  it('refuse a file that is not JSON rather than fall back to the weaker check', () => {
+    writeChecksums('{ "0.4.0": ');
+
+    expect(() => readAddonChecksums(root)).toThrow(AddonChecksumError);
+  });
+
+  it('refuse a file of the wrong shape', () => {
+    for (const text of ['[]', '{"0.4.0": "abc"}', '{"0.4.0": {"linux-x64": 7}}', `{"0.4.0": {"linux-x64": "${'z'.repeat(64)}"}}`]) {
+      writeChecksums(text);
+
+      expect(() => readAddonChecksums(root), text).toThrow(/must map each version/);
+    }
+  });
+
+  it('give the digest for a version and platform, and nothing for anything else', () => {
+    writeChecksums(JSON.stringify({ '0.4.0': { 'linux-x64': digest.toUpperCase() } }));
+    const checksums = readAddonChecksums(root);
+
+    expect(pinnedAddonDigest(checksums, '0.4.0', 'linux-x64')).toBe(digest);
+    expect(pinnedAddonDigest(checksums, '0.4.0', 'win32-x64')).toBeUndefined();
+    expect(pinnedAddonDigest(checksums, '0.5.0', 'linux-x64')).toBeUndefined();
+    expect(pinnedAddonDigest(checksums, 'constructor', 'toString')).toBeUndefined();
+  });
+
+  it('read the committed file, which names only real versions and platforms', () => {
+    const checksums = readAddonChecksums(repoRoot);
+
+    expect(Object.keys(checksums).length).toBeGreaterThan(0);
+    for (const [version, byTag] of Object.entries(checksums)) {
+      expect(version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/);
+      for (const tag of Object.keys(byTag as Record<string, string>)) expect(SUPPORTED_PLATFORMS).toContain(tag);
+    }
   });
 });
