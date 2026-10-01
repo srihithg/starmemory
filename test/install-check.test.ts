@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 // @ts-expect-error -- plain JS module, no type declarations by design
 import {
   RUNTIME_DEPENDENCIES,
@@ -12,9 +13,12 @@ import {
   findMissingDeps,
   findMissingAddons,
   isSupportedPlatform,
+  npmInstallArgs,
   platformTag,
   unsupportedPlatformMessage,
 } from '../cli/install-check.mjs';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let root: string;
 
@@ -120,5 +124,49 @@ describe('unsupportedPlatformMessage', () => {
 
   it('says how to proceed rather than only what failed', () => {
     expect(unsupportedPlatformMessage('darwin', 'x64')).toMatch(/build|npm run build/i);
+  });
+});
+
+describe('npmInstallArgs', () => {
+  it('installs exactly what the lockfile records, running no install scripts', () => {
+    fs.writeFileSync(path.join(root, 'package-lock.json'), '{}');
+
+    expect(npmInstallArgs(root)).toEqual(['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']);
+  });
+
+  it('counts npm-shrinkwrap.json as a lockfile', () => {
+    fs.writeFileSync(path.join(root, 'npm-shrinkwrap.json'), '{}');
+
+    expect(npmInstallArgs(root)[0]).toBe('ci');
+  });
+
+  it('falls back to npm install without a lockfile, still running no install scripts', () => {
+    expect(npmInstallArgs(root)).toEqual(['install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund']);
+  });
+
+  it('uses npm ci for this checkout, which commits its lockfile', () => {
+    expect(npmInstallArgs(repoRoot)[0]).toBe('ci');
+  });
+});
+
+describe('install scripts in package-lock.json', () => {
+  // bootstrap.mjs and CI both install with --ignore-scripts, and each package
+  // here works without its script. A new one needs the same check: either it
+  // works without, or it gets an `npm rebuild <name>` after the install.
+  const WORK_WITHOUT_THEIR_SCRIPTS = [
+    'node_modules/esbuild',
+    'node_modules/fsevents',
+    'node_modules/onnxruntime-node',
+    'node_modules/protobufjs',
+    'node_modules/sharp',
+  ];
+
+  it('belong only to packages known to work without them', () => {
+    const lock = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'));
+    const withScripts = Object.entries(lock.packages as Record<string, { hasInstallScript?: boolean }>)
+      .filter(([, entry]) => entry.hasInstallScript)
+      .map(([name]) => name);
+
+    expect(withScripts.filter((name) => !WORK_WITHOUT_THEIR_SCRIPTS.includes(name))).toEqual([]);
   });
 });

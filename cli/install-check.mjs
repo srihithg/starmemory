@@ -69,6 +69,19 @@ export function expectedDigest(sumsText, fileName) {
   return undefined;
 }
 
+/** The npm arguments that install the runtime dependencies under `root`.
+ *
+ * `npm ci` whenever a lockfile is there, so every package is the version and
+ * sha512 it records. --ignore-scripts because no runtime dependency needs its
+ * install script: onnxruntime-node's only fetches CUDA libraries on linux-x64,
+ * which the embedder never loads since it runs on the CPU, sharp's only decides
+ * whether to compile from source instead of using the prebuilt package npm
+ * installs anyway, and protobufjs's only prints a warning. */
+export function npmInstallArgs(root) {
+  const locked = ['package-lock.json', 'npm-shrinkwrap.json'].some((name) => fs.existsSync(path.join(root, name)));
+  return [locked ? 'ci' : 'install', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'];
+}
+
 /** Dependencies that are not usably installed under `root`.
  *
  * Probing each package's own package.json rather than just the node_modules

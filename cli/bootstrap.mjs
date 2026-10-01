@@ -18,6 +18,7 @@ import {
   findMissingAddons,
   findMissingDeps,
   isSupportedPlatform,
+  npmInstallArgs,
   platformTag,
   unsupportedPlatformMessage,
 } from './install-check.mjs';
@@ -44,13 +45,14 @@ function findNpm() {
 }
 
 function runNpmInstall(root) {
+  const args = npmInstallArgs(root);
   return new Promise((resolve, reject) => {
     log('starmemory: installing dependencies (first run only, this takes a minute)...');
     // npm is a script with a `#!/usr/bin/env node` shebang, so node's directory
     // has to be on the child's PATH as well, not just known to us.
     const nodeDir = path.dirname(process.execPath);
     const fallbackPath = process.platform === 'win32' ? '' : '/usr/bin:/bin';
-    const child = spawn(findNpm(), ['install', '--omit=dev', '--no-audit', '--no-fund'], {
+    const child = spawn(findNpm(), args, {
       cwd: root,
       stdio: ['ignore', 'pipe', 'pipe'],
       // path.delimiter: ':' on POSIX, ';' on Windows.
@@ -67,7 +69,7 @@ function runNpmInstall(root) {
         log('starmemory: dependencies installed.');
         resolve();
       } else {
-        reject(new Error(`npm install exited with ${code}. Run it by hand in ${root}`));
+        reject(new Error(`npm ${args.join(' ')} exited with ${code}. Run it by hand in ${root}`));
       }
     });
   });
