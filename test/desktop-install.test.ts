@@ -19,6 +19,7 @@ import { RUNTIME_DEPENDENCIES, findMissingAddons, findMissingDeps } from '../cli
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SECRET = 'secret-token-123';
+const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 
 let dir: string;
 let home: string;
@@ -106,7 +107,7 @@ describe('desktop-install', () => {
   it('records the copy it ran from for the launcher, and follows Claude Code only for a copy Claude Code installed', () => {
     install();
 
-    expect(readLaunch()).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION });
+    expect(readLaunch()).toEqual({ root, pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION, minimumVersion: VERSION });
   });
 
   it('pins the launcher to the plugin it ran from, by the marketplace its copy sits under', () => {
@@ -117,8 +118,8 @@ describe('desktop-install', () => {
       const { status, output } = install([], path.join(copy, 'cli', 'starmemory.mjs'));
 
       expect(status).toBe(0);
-      expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION });
-      expect(output).toContain('then at each launch the newest copy of starmemory@acme Claude Code has installed, the newest with its dependencies installed first');
+      expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION, minimumVersion: VERSION });
+      expect(output).toContain(`then at each launch the newest copy of starmemory@acme Claude Code has installed, never one older than ${VERSION}`);
     }
   });
 
@@ -127,7 +128,7 @@ describe('desktop-install', () => {
 
     expect(install([], path.join(copy, 'cli', 'starmemory.mjs')).status).toBe(0);
 
-    expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION });
+    expect(readLaunch()).toEqual({ root: fs.realpathSync.native(copy), pluginsDir: path.join(home, '.claude', 'plugins'), follow: false, launcherVersion: LAUNCHER_VERSION, minimumVersion: VERSION });
   });
 
   it('uses the name given with --name, and drops its own earlier entry but no one else\'s', () => {
@@ -141,6 +142,24 @@ describe('desktop-install', () => {
     expect(output).toContain(`replaced  the earlier entry "${DEFAULT_SERVER_NAME}"`);
     expect(output).toContain('mcp__remote-devices__star-recall__search');
     expect(backups()).toHaveLength(2);
+  });
+
+  it('keeps only its two newest backups of the config, and deletes no file but its own', () => {
+    writeConfig(existingConfig);
+    const notOurs = [`${path.basename(configFile)}.starmemory-backup-notes.txt`, 'other.json.starmemory-backup-20200101-000000'];
+    for (const name of notOurs) fs.writeFileSync(path.join(path.dirname(configFile), name), 'kept');
+
+    const outputs = [1, 2, 3, 4].map(() => install().output);
+
+    const ours = backups().filter((name) => !notOurs.includes(name));
+    expect(ours).toHaveLength(2);
+    for (const name of notOurs) expect(fs.readFileSync(path.join(path.dirname(configFile), name), 'utf8')).toBe('kept');
+    // The one the last run made is kept, holding the config as that run found it.
+    const last = /backup {4}(.+), which holds/.exec(outputs[3])![1];
+    expect(ours).toContain(path.basename(last));
+    expect(JSON.parse(fs.readFileSync(last, 'utf8'))).toEqual(readConfig());
+    expect(outputs[0]).toContain('only the newest 2 of starmemory\'s backups are kept\n');
+    expect(outputs[2]).toContain('only the newest 2 of starmemory\'s backups are kept, so 1 older one was deleted');
   });
 
   it('replaces the entry an earlier version named "starmem", leaving one under the new name', () => {
@@ -696,21 +715,46 @@ describe('the stable launcher', () => {
     expect(resolvePluginRoot({ root: path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.1.0'), pluginsDir, follow: true })).toBe(newer);
   });
 
-  it('prefers the newest copy that is prepared, falls back to the newest, and never starts an orphaned one', () => {
+  it('starts the newest copy even when only an older one is prepared, and never an orphaned one', () => {
     const pluginsDir = path.join(dir, 'plugins');
     const cache = path.join(pluginsDir, 'cache', 'acme', 'starmemory');
     const older = prepare(copyAt(path.join(cache, '0.3.0'), '0.3.0'));
-    const orphaned = prepare(copyAt(path.join(cache, '0.3.5'), '0.3.5'));
+    const orphaned = prepare(copyAt(path.join(cache, '0.4.5'), '0.4.5'));
     fs.writeFileSync(path.join(orphaned, '.orphaned_at'), '1790000000000');
     const newest = copyAt(path.join(cache, '0.4.0'), '0.4.0');
     const launch = { root: older, pluginsDir, follow: true, marketplace: 'acme' };
 
-    expect(resolvePluginRoot(launch)).toBe(older);
-    fs.rmSync(path.join(older, 'node_modules', 'zod'), { recursive: true });
+    expect(isPrepared(newest)).toBe(false);
     expect(resolvePluginRoot(launch)).toBe(newest);
   });
 
-  it('has desktop-install prepare the newest copy, not an older one prepared already, and say which one starts', () => {
+  it('takes a prepared copy over one installed later only when their versions are the same', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const cache = path.join(pluginsDir, 'cache', 'acme', 'starmemory');
+    const prepared = prepare(copyAt(path.join(cache, '0.4.0'), '0.4.0'));
+    const later = copyAt(path.join(cache, '0.4.0-rebuilt'), '0.4.0');
+    const past = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(prepared, 'package.json'), past, past);
+    const launch = { root: prepared, pluginsDir, follow: true, marketplace: 'acme' };
+
+    expect(resolvePluginRoot(launch)).toBe(prepared);
+    fs.rmSync(path.join(prepared, 'node_modules'), { recursive: true });
+    expect(resolvePluginRoot(launch)).toBe(later);
+  });
+
+  it('never starts a copy older than launch.json\'s minimumVersion', () => {
+    const pluginsDir = path.join(dir, 'plugins');
+    const cache = path.join(pluginsDir, 'cache', 'acme', 'starmemory');
+    const older = prepare(copyAt(path.join(cache, '0.3.0'), '0.3.0'));
+    const launch = { root: older, pluginsDir, follow: true, marketplace: 'acme' };
+
+    expect(resolvePluginRoot({ ...launch, minimumVersion: '0.3.0' })).toBe(older);
+    expect(resolvePluginRoot({ ...launch, minimumVersion: '0.4.0' })).toBeUndefined();
+    expect(resolvePluginRoot({ ...launch, minimumVersion: '0.3.0-beta.1' })).toBe(older);
+    expect(resolvePluginRoot({ root: older, pluginsDir, follow: false, minimumVersion: '0.3.1' })).toBeUndefined();
+  });
+
+  it('has desktop-install prepare the newest copy, not an older one prepared already, and start it either way', () => {
     const cache = path.join(home, '.claude', 'plugins', 'cache', 'acme', 'starmemory');
     const at = (version: string) => {
       const copy = freshCopy(path.join(cache, version));
@@ -755,17 +799,16 @@ describe('the stable launcher', () => {
     const failed = run(false);
 
     expect(failed.prepared).toEqual([newer]);
-    expect(failed.output).toContain(`starts    ${older}, then`);
-    expect(failed.output).toContain(`newest    ${newer}, which starts once its dependencies are installed\n`);
-    expect(failed.output).not.toContain('the app\'s first launch tries again');
-    expect(resolvePluginRoot(readLaunch())).toBe(older);
+    expect(failed.output).toContain(`starts    ${newer}, then`);
+    expect(failed.output).toContain('the app\'s first launch tries again');
+    expect(resolvePluginRoot(readLaunch())).toBe(newer);
+    expect(older).not.toBe(newer);
 
     const done = run(true);
 
     expect(done.code).toBe(0);
     expect(done.prepared).toEqual([newer]);
     expect(done.output).toContain(`starts    ${newer}, then`);
-    expect(done.output).not.toContain('newest    ');
     expect(resolvePluginRoot(readLaunch())).toBe(newer);
   });
 
@@ -847,7 +890,7 @@ describe('the stable launcher', () => {
 
     expect(fs.readFileSync(launcher, 'utf8')).toBe(fs.readFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), 'utf8'));
     expect(fs.readFileSync(path.join(desktop, 'run-node.sh'), 'utf8')).toBe(fs.readFileSync(path.join(root, 'cli', 'run-node.sh'), 'utf8'));
-    expect(readLaunch()).toEqual({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION });
+    expect(readLaunch()).toEqual({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION, minimumVersion: '0.4.0' });
     expect(fs.readdirSync(desktop).sort()).toEqual(['launch.json', 'launch.mjs', 'run-node.sh']);
 
     // A higher version from another marketplace, which the old launcher would
@@ -856,12 +899,56 @@ describe('the stable launcher', () => {
     const replaced = files();
     expect(start().stdout).toBe('own');
     expect(files()).toEqual(replaced);
+  });
 
-    // Nor does this copy put its launcher back over a newer one.
-    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ ...readLaunch(), launcherVersion: LAUNCHER_VERSION + 1 }));
-    const newer = files();
+  it('goes by the launcher\'s files, not the version launch.json claims for it', () => {
+    const { pluginsDir, own, desktop, launcher, start } = launcherFrom030();
+    // Any copy can write launch.json, so a launcher version it claims proves nothing.
+    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: 999 }));
+
     expect(start().stdout).toBe('own');
-    expect(files()).toEqual(newer);
+
+    expect(fs.readFileSync(launcher, 'utf8')).toBe(fs.readFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), 'utf8'));
+    expect(readLaunch().launcherVersion).toBe(LAUNCHER_VERSION);
+  });
+
+  it('is never rewritten by an older copy, or another plugin\'s, that a launcher started', () => {
+    const { pluginsDir, own, desktop, launcher, files } = launcherFrom030();
+    const newer = stubbedCopy(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.5.0'), '0.5.0', 'newer');
+    const foreign = stubbedCopy(path.join(pluginsDir, 'cache', 'evil', 'starmemory', '9.0.0'), '9.0.0', 'someone else');
+    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme' }));
+
+    // A launcher that starts the copy it names, whatever the newest is.
+    for (const [copy, name] of [[own, 'own'], [foreign, 'someone else']]) {
+      fs.writeFileSync(launcher, `await import(${JSON.stringify(pathToFileURL(path.join(copy, 'cli', 'mcp-server.mjs')).href)});\n`);
+      const before = files();
+
+      const r = spawnSync(process.execPath, [launcher], { env, encoding: 'utf8', timeout: 20_000 });
+
+      expect(r.stdout).toBe(name);
+      expect(files()).toEqual(before);
+    }
+    expect(fs.existsSync(newer)).toBe(true);
+  });
+
+  it('raises its floor to each newer version it starts, and then never starts an older one', () => {
+    const { pluginsDir, own, desktop, launcher } = launcherFrom030();
+    fs.copyFileSync(path.join(root, 'cli', 'desktop-launch.mjs'), launcher);
+    fs.writeFileSync(path.join(desktop, 'launch.json'), JSON.stringify({ root: own, pluginsDir, follow: true, plugin: 'starmemory@acme', marketplace: 'acme', launcherVersion: LAUNCHER_VERSION, minimumVersion: '0.4.0' }));
+    const newer = stubbedCopy(path.join(pluginsDir, 'cache', 'acme', 'starmemory', '0.5.0'), '0.5.0', 'newer');
+    const start = () => spawnSync(process.execPath, [launcher], { env, encoding: 'utf8', timeout: 20_000 });
+
+    expect(start().stdout).toBe('newer');
+    expect(readLaunch().minimumVersion).toBe('0.5.0');
+
+    // The newer copy goes, as an uninstall or a broken update leaves things.
+    fs.writeFileSync(path.join(newer, '.orphaned_at'), '1790000000000');
+    const refused = start();
+
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toBe('');
+    expect(refused.stderr).toContain('every installed copy of starmemory is older than 0.5.0');
+    expect(readLaunch().minimumVersion).toBe('0.5.0');
   });
 
   it('starts the server all the same when it cannot replace the launcher, and says so in one line', () => {

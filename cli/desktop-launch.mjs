@@ -11,23 +11,28 @@
 // installed and starts that copy's MCP server, and an update reaches Cowork
 // without running desktop-install again. It looks only at copies of the plugin
 // desktop-install ran from, starmemory@<marketplace>: another plugin that calls
-// itself starmemory, with a higher version, is someone else's code.
+// itself starmemory, with a higher version, is someone else's code. It never
+// starts a copy older than the newest it has started, since an older copy can
+// lack a fix the newer one has.
 //
 // Self-contained and plain node, with node: imports only: it has to start
 // whichever version is installed, before that version's dependencies exist.
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** What desktop-install records beside this file: { root, pluginsDir, follow,
- * launcherVersion }, and with follow, { plugin: "starmemory@<marketplace>",
- * marketplace }. */
+ * launcherVersion, minimumVersion }, and with follow, { plugin:
+ * "starmemory@<marketplace>", marketplace }. minimumVersion is the oldest
+ * version this may start: the version desktop-install ran from, raised to each
+ * newer one this starts. */
 export const LAUNCH_CONFIG = 'launch.json';
 /** This file's version, recorded in launch.json as launcherVersion. Raise it
- * with any change a launcher copied already should get: the MCP server of a
- * newer plugin, started by a launcher recorded with a lower one or none, copies
- * this file over it. */
-export const LAUNCHER_VERSION = 1;
+ * with every change. A copy replaces a launcher whose files differ from its own
+ * (desktop-install.mjs, refreshLauncher), but older copies go by this number
+ * and leave alone a launcher recorded with one at least their own. */
+export const LAUNCHER_VERSION = 2;
 export const MIN_NODE_MAJOR = 22;
 
 function readJson(file) {
@@ -73,10 +78,28 @@ function isWithin(dir, parent) {
 }
 
 /** [major, minor, patch, 1 for a release or 0 for a prerelease], so that
- * 0.4.0-beta.1 comes after 0.3.9 and before 0.4.0. */
-function versionOf(dir) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(-[^+]+)?/.exec(String(readJson(path.join(dir, 'package.json'))?.version ?? ''));
+ * 0.4.0-beta.1 comes after 0.3.9 and before 0.4.0. Anything that is not a
+ * version is [0, 0, 0, 0], below every one. */
+export function parseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)(-[^+]+)?/.exec(String(version ?? ''));
   return match ? [Number(match[1]), Number(match[2]), Number(match[3]), match[4] ? 0 : 1] : [0, 0, 0, 0];
+}
+
+/** The version a copy's package.json gives, as written. */
+export function packageVersionOf(dir) {
+  const version = readJson(path.join(dir, 'package.json'))?.version;
+  return typeof version === 'string' ? version : undefined;
+}
+
+function versionOf(dir) {
+  return parseVersion(packageVersionOf(dir));
+}
+
+/** Negative, zero or positive as version `a` is below, the same as or above `b`. */
+export function compareVersions(a, b) {
+  const [va, vb] = [parseVersion(a), parseVersion(b)];
+  for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return va[i] - vb[i];
+  return 0;
 }
 
 function installedAtMs(dir) {
@@ -99,15 +122,17 @@ export function isPrepared(dir) {
   );
 }
 
-/** The runnable copies, highest version first, the latest installed first on
- * a tie. */
+/** The runnable copies, highest version first. Of copies with the same
+ * version, a prepared one comes first, then the latest installed. */
 export function newestFirst(dirs) {
+  const copies = [...new Set(dirs)]
+    .filter(isStarmemoryRoot)
+    .map((dir) => ({ dir, version: versionOf(dir), prepared: isPrepared(dir), installedAt: installedAtMs(dir) }));
   const byNewest = (a, b) => {
-    const [va, vb] = [versionOf(a), versionOf(b)];
-    for (let i = 0; i < va.length; i++) if (va[i] !== vb[i]) return vb[i] - va[i];
-    return installedAtMs(b) - installedAtMs(a);
+    for (let i = 0; i < a.version.length; i++) if (a.version[i] !== b.version[i]) return b.version[i] - a.version[i];
+    return Number(b.prepared) - Number(a.prepared) || b.installedAt - a.installedAt;
   };
-  return [...new Set(dirs)].filter(isStarmemoryRoot).sort(byNewest);
+  return copies.sort(byNewest).map((copy) => copy.dir);
 }
 
 /** A marketplace name that is one folder name and nothing else. */
@@ -186,12 +211,36 @@ export function startableCopies({ root, pluginsDir, follow, marketplace }) {
   return isStarmemoryRoot(root) ? [root] : [];
 }
 
-/** The copy to start: the newest of startableCopies that is prepared, else
- * the newest. A prepared one first: just after an update the newest usually
- * is not, and the app's first launch would wait on npm install. */
+/** The copy to start: the newest of startableCopies, and never one below
+ * launch.minimumVersion. Prepared or not: just after an update the newest
+ * usually is not, so the app's first launch waits on npm install, and an older
+ * copy that is ready can lack a fix the newer one has. */
 export function resolvePluginRoot(launch) {
-  const copies = startableCopies(launch);
-  return copies.find(isPrepared) ?? copies[0];
+  return startableCopies(launch).find((dir) => compareVersions(packageVersionOf(dir), launch?.minimumVersion) >= 0);
+}
+
+/** Raise launch.json's minimumVersion to the version of `root`, about to be
+ * started, when that is higher. Written beside and renamed in, and never a
+ * reason not to start: a launch.json that cannot be written keeps the floor it
+ * had. */
+export function recordStarted(dir, launch, root) {
+  const version = packageVersionOf(root);
+  if (version === undefined || compareVersions(version, launch.minimumVersion) <= 0) return false;
+  const file = path.join(dir, LAUNCH_CONFIG);
+  const temp = `${file}.starmemory-${randomBytes(8).toString('hex')}.tmp`;
+  try {
+    const fd = fs.openSync(temp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify({ ...launch, minimumVersion: version }, null, 2)}\n`);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+    return true;
+  } catch {
+    fs.rmSync(temp, { force: true });
+    return false;
+  }
 }
 
 function fail(message) {
@@ -205,10 +254,15 @@ async function main() {
   if (Number(process.versions.node.split('.')[0]) < MIN_NODE_MAJOR) {
     fail(`needs Node ${MIN_NODE_MAJOR} or newer, but the Claude app started ${process.execPath} (${process.version}). Install a newer Node, then quit and reopen the app.`);
   }
-  const root = resolvePluginRoot(readJson(path.join(here, LAUNCH_CONFIG)) ?? {});
+  const launch = readJson(path.join(here, LAUNCH_CONFIG)) ?? {};
+  const root = resolvePluginRoot(launch);
+  if (!root && startableCopies(launch).length > 0) {
+    fail(`every installed copy of starmemory is older than ${launch.minimumVersion}, the oldest version the Claude app may start. Update it in Claude Code (claude plugin update starmemory), or run desktop-install from the copy to start, then quit and reopen the Claude app.`);
+  }
   if (!root) {
     fail('no installed copy of starmemory was found. Install it in Claude Code again (claude plugin install starmemory) or run desktop-install from a copy, then quit and reopen the Claude app.');
   }
+  recordStarted(here, launch, root);
   process.stderr.write(`starmemory: starting the MCP server from ${root}\n`);
   // In this process, not a child: cli/mcp-server.mjs installs what is missing
   // and hands off to dist/, forwarding signals and watching stdin as it does

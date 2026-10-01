@@ -16,12 +16,12 @@
 // Plain node, node: imports only: this runs from a fresh plugin copy, before
 // its dependencies are installed.
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, resolvePluginRoot, startableCopies } from './desktop-launch.mjs';
+import { LAUNCH_CONFIG, LAUNCHER_VERSION, MIN_NODE_MAJOR, marketplaceOf, packageVersionOf, resolvePluginRoot, startableCopies } from './desktop-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,8 +42,8 @@ can search, read, remember and forget.
   --replace       let --name take over an entry of that name that is not starmemory's
   --restart       quit the Claude app, make the change, and open it again (macOS)
   --config <file> edit this config file instead of the app's own
-  --no-prepare    do not install starmemory's dependencies now; the app starts a copy that has
-                  them, or installs them at its first launch`;
+  --no-prepare    do not install starmemory's dependencies now; the app installs them at its
+                  first launch`;
 
 export class UsageError extends Error {}
 export class InvalidConfigError extends Error {}
@@ -171,36 +171,55 @@ export function withServer(config, name, entry, launcher) {
 /** What the launcher is told about the copy at `root`. When Claude Code
  * installed it, the launcher follows that plugin's later installs, and only
  * that plugin's: starmemory from the same marketplace. A checkout elsewhere is
- * used as it is. */
+ * used as it is. Either way it starts no copy older than this one. */
 export function launchConfig({ root, pluginsDir }) {
   const marketplace = marketplaceOf(root, pluginsDir);
   const follow = marketplace ? { follow: true, plugin: `starmemory@${marketplace}`, marketplace } : { follow: false };
-  return { root, pluginsDir, ...follow, launcherVersion: LAUNCHER_VERSION };
+  const minimumVersion = packageVersionOf(root);
+  return { root, pluginsDir, ...follow, launcherVersion: LAUNCHER_VERSION, ...(minimumVersion ? { minimumVersion } : {}) };
 }
+
+/** The files installLauncher copies: this copy's file, and its name in the
+ * launcher's folder. */
+const LAUNCHER_FILES = [
+  ['desktop-launch.mjs', 'launch.mjs'],
+  ['run-node.sh', 'run-node.sh'],
+];
 
 /** Copy the launcher and the node-finding shim into `dir`, and record `launch`
  * beside them. Rewritten on every run, so running this again brings a newer
  * launcher along. Each file is replaced whole, so an app starting meanwhile
- * runs the old launcher or the new one, and launch.json goes last, since its
- * launcherVersion speaks for the files beside it. */
+ * runs the old launcher or the new one, and launch.json goes last, once the
+ * files it is for are in place. */
 export function installLauncher(dir, launch) {
   fs.mkdirSync(dir, { recursive: true });
-  const launcher = path.join(dir, 'launch.mjs');
-  for (const [from, to] of [['desktop-launch.mjs', launcher], ['run-node.sh', path.join(dir, 'run-node.sh')]]) {
+  for (const [from, to] of LAUNCHER_FILES) {
     const source = path.join(here, from);
-    replaceFile(to, fs.readFileSync(source), fs.statSync(source).mode & 0o777);
+    replaceFile(path.join(dir, to), fs.readFileSync(source), fs.statSync(source).mode & 0o777);
   }
   replaceFile(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`, 0o644);
-  return launcher;
+  return path.join(dir, 'launch.mjs');
+}
+
+function sha256Of(file) {
+  try {
+    return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  } catch {
+    return undefined;
+  }
 }
 
 /** Replace the launcher the Claude app started this process from with this
- * copy's, when launch.json records an older one or none: desktop-install is
- * the only other thing that copies it. The launcher running now is loaded
- * already, so the new one runs from the app's next start. A launch.json from
- * before the marketplace was recorded is pinned as desktop-install pins one
- * now. Writes only in the launcher's folder, and nothing unless the launcher
- * started this process. True when it replaced the launcher. */
+ * copy's, when its files are not this copy's byte for byte and this copy is
+ * the one it should start: the newest it may start (desktop-launch.mjs,
+ * resolvePluginRoot). An older copy, or another plugin's, never rewrites it,
+ * whatever launch.json says the launcher's version is, since any copy can
+ * write that. desktop-install is the only other thing that copies it. The
+ * launcher running now is loaded already, so the new one runs from the app's
+ * next start. A launch.json from before the marketplace was recorded is
+ * pinned as desktop-install pins one now. Writes only in the launcher's
+ * folder, and nothing unless the launcher started this process. True when it
+ * replaced the launcher. */
 export function refreshLauncher({ env = process.env, script = process.argv[1] } = {}) {
   const dir = launcherDir(env);
   if (script === undefined || !sameFile(script, path.join(dir, 'launch.mjs'))) return false;
@@ -210,12 +229,14 @@ export function refreshLauncher({ env = process.env, script = process.argv[1] } 
   } catch {
     return false; // the launcher cannot have started anything without it
   }
-  // A newer one stays: the launcher can start an older copy, a prepared one.
-  if (typeof launch?.root !== 'string' || launch.launcherVersion >= LAUNCHER_VERSION) return false;
+  if (typeof launch?.root !== 'string') return false;
   const current =
     launch.follow && !launch.marketplace && launch.pluginsDir
-      ? launchConfig({ root: launch.root, pluginsDir: launch.pluginsDir })
+      ? { ...launchConfig({ root: launch.root, pluginsDir: launch.pluginsDir }), ...(launch.minimumVersion ? { minimumVersion: launch.minimumVersion } : {}) }
       : { ...launch, launcherVersion: LAUNCHER_VERSION };
+  const starts = resolvePluginRoot(current);
+  if (starts === undefined || !sameFile(starts, path.resolve(here, '..'))) return false;
+  if (LAUNCHER_FILES.every(([from, to]) => sha256Of(path.join(here, from)) === sha256Of(path.join(dir, to)))) return false;
   installLauncher(dir, current);
   return true;
 }
@@ -235,6 +256,41 @@ export function backupConfig(file, now = new Date()) {
       if (error.code !== 'EEXIST') throw error;
     }
   }
+}
+
+/** How many of its backups of the config desktop-install keeps: the one a run
+ * makes, and the one before it. Each holds every server's credentials. */
+export const BACKUPS_KEPT = 2;
+
+/** Delete all but the newest `keep` of the backups backupConfig made of
+ * `file`, going by their exact names, so nothing else beside the config is
+ * touched. `made`, the one just made, stays whatever its time says, as a clock
+ * set back would make it look older. Returns the files deleted. */
+export function pruneBackups(file, { made, keep = BACKUPS_KEPT } = {}) {
+  const dir = path.dirname(file);
+  const name = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ours = new RegExp(`^${name}\\.starmemory-backup-(\\d{8}-\\d{6})(?:-(\\d+))?$`);
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const backups = names
+    .map((entry) => ({ entry, match: ours.exec(entry) }))
+    .filter(({ entry, match }) => match && (made === undefined || entry !== path.basename(made)))
+    .map(({ entry, match }) => ({ entry, stamp: match[1], n: Number(match[2] ?? 0) }))
+    .sort((a, b) => (a.stamp === b.stamp ? b.n - a.n : a.stamp < b.stamp ? 1 : -1));
+  const deleted = [];
+  for (const { entry } of backups.slice(made === undefined ? keep : keep - 1)) {
+    try {
+      fs.unlinkSync(path.join(dir, entry));
+      deleted.push(path.join(dir, entry));
+    } catch {
+      // gone already, or not a file
+    }
+  }
+  return deleted;
 }
 
 /** `contents` into `file` with `mode`, written beside it and renamed in, so no
@@ -471,12 +527,11 @@ export async function main(argv, deps = {}) {
   // The shim beside this file, which is the one installLauncher copies.
   const node = nodeTheAppFinds(here, { env, platform });
 
-  // The newest copy is the one to prepare. The launcher starts a prepared copy
-  // ahead of it, so which one starts is known only once that is done.
-  const [newest] = startableCopies(launch);
-  const ready = opts.prepare && newest ? await prepare(newest) : true;
+  // The copy the launcher starts is the one to prepare: the newest, and never
+  // one older than this copy.
   const serverRoot = resolvePluginRoot(launch);
-  if (!ready) err(`starmemory: its dependencies could not be installed now (see above)${serverRoot === newest ? "; the app's first launch tries again." : '.'}`);
+  const ready = opts.prepare && serverRoot ? await prepare(serverRoot) : true;
+  if (!ready) err("starmemory: its dependencies could not be installed now (see above); the app's first launch tries again.");
 
   // Once this has told the app to quit, it opens it again on every way out:
   // a quit that did not finish in time, a refusal or a failed write among
@@ -528,19 +583,26 @@ export async function main(argv, deps = {}) {
     const { config, replaced } = withServer(current.config, opts.name, entry, launcher);
     const backup = current.exists ? backupConfig(configFile, now) : undefined;
     writeConfig(configFile, config);
+    const deleted = backup ? pruneBackups(configFile, { made: backup }) : [];
     const reopened = quit ? reopen() : false;
 
     out(`starmemory: registered "${opts.name}" with the Claude desktop app.`);
     out(`  config    ${configFile}`);
     out(`  backup    ${backup ? `${backup}, which holds the same credentials as the config` : 'none, the file is new'}`);
-    out(`  launcher  ${launcher}`);
-    out(
-      `  starts    ${serverRoot ?? 'nothing yet: no runnable copy was found'}` +
-        (launch.follow ? `, then at each launch the newest copy of ${launch.plugin} Claude Code has installed, the newest with its dependencies installed first` : '')
-    );
-    if (serverRoot !== newest) {
-      out(`  newest    ${newest}, which starts once its dependencies are installed${opts.prepare ? '' : ': run this without --no-prepare to install them'}`);
+    if (backup) {
+      out(
+        `            only the newest ${BACKUPS_KEPT} of starmemory's backups are kept` +
+          (deleted.length > 0 ? `, so ${deleted.length} older ${deleted.length === 1 ? 'one was' : 'ones were'} deleted` : '')
+      );
     }
+    out(`  launcher  ${launcher}`);
+    const tooOld = serverRoot === undefined && startableCopies(launch).length > 0;
+    out(
+      `  starts    ${serverRoot ?? (tooOld ? 'nothing yet: every copy Claude Code has installed is older than this one' : 'nothing yet: no runnable copy was found')}` +
+        (launch.follow ? `, then at each launch the newest copy of ${launch.plugin} Claude Code has installed` : '') +
+        (launch.minimumVersion ? `, never one older than ${launch.minimumVersion}` : '')
+    );
+    if (tooOld) out('            update it with claude plugin update starmemory, then quit the Claude app and open it again');
     out(nodeLine(node));
     if (entry.env) out(`  settings  ${Object.keys(entry.env).join(', ')}, copied from this shell`);
     if (replaced.length > 0) out(`  replaced  the earlier entry ${replaced.map((n) => `"${n}"`).join(', ')}`);
