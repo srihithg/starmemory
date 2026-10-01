@@ -14,8 +14,10 @@ Cowork keeps no transcript on your machine, so there the model records the
 session itself with `remember`; `forget` takes any session back out. See
 [Use it in Cowork](#use-it-in-cowork).
 
-Everything runs on your machine. Nothing leaves it except the summary
-requests, which go through your own Claude Code or Codex login.
+Everything runs on your machine, but not everything it keeps stays there.
+Summaries send conversation text to the model provider, and Cowork sessions
+read your memory from the cloud. [Privacy](#privacy) says what is kept, what
+is sent, and what forgetting cannot reach.
 
 ## Requirements
 
@@ -223,6 +225,81 @@ truth), `index-v*.g*.hnsw` (vector index, rebuilt from the store),
 `text-v*/` (Tantivy), `archive/<harness>/<project>/` (gzipped transcripts and
 their `-summary.txt`), `cowork/<project>/` (Cowork records), `forgotten.txt`
 (forgotten sessions) and `desktop/` (the launcher the Claude app runs).
+
+## Privacy
+
+starmemory keeps copies of your sessions, and people paste passwords, keys and
+customer details into sessions. This is what it keeps, what it sends, and what
+it cannot take back.
+
+**What it keeps.** All of it is under `~/.config/starmemory` unless the
+`STARMEMORY_*` settings point elsewhere.
+
+- `archive/` holds a gzip copy of every transcript it indexes, whole: what you
+  typed, what the assistant wrote, and every tool's input and output.
+- `store.mdb` and the text index hold the text of each exchange, and the
+  vector index holds embeddings of it.
+- `-summary.txt` beside each copy holds its summary.
+- `cowork/` holds the notes Cowork sessions write with `remember`.
+- `sync.log` lists what each sync did, with project names, session ids and
+  paths. `forgotten.txt` lists the sessions you asked to forget.
+
+Outside that folder, the start-up reminder keeps an empty marker for each
+session, named after its id, in `~/.cache/starmemory/reminders` for two weeks.
+`desktop-install` leaves its two newest backups of `claude_desktop_config.json`
+beside that file, and they hold every server's credentials.
+
+**Who can read it.** Folders are made 0700 and files 0600, so only your
+account can open them, which is how Claude Code keeps its own transcripts. The
+first sync after an update takes group and other permissions off anything an
+earlier version made readable to other accounts.
+
+**How long it stays.** A conversation stays until it has been quiet for 180
+days, set by `STARMEMORY_TTL_DAYS`. Then its rows, index entries, archive copy
+and summary all go. That is longer than the 30 days Claude Code keeps its own
+transcripts, since the archive is there to outlast them. `sync.log` stays near
+2 MB.
+
+**What leaves your machine.**
+
+- Summaries. Once a conversation has been quiet for two hours, sync sends its
+  text to the model provider through your own login: Claude Code
+  conversations through Claude Code's, Codex conversations through Codex's.
+  It sends what you typed and what the assistant wrote, but no tool input or
+  output. The text is cut to about 24,000 characters, and the secrets it
+  recognises are redacted. Redaction is a best effort, so a secret written as
+  plain words can still go out. The model is asked in a fresh session with no
+  tools, no settings and one turn.
+- What Cowork reads. A Cowork session runs in the cloud and reaches your local
+  memory through the Claude app. What `search` and `read` return to it is then
+  part of that session.
+- Nothing else. There is no telemetry. The first run downloads the embedding
+  model and the npm packages, and on platforms other than Apple Silicon Macs
+  the native addon.
+
+**Who can search what.** Claude Code, Codex and the Claude app each start
+their own server, and all of them read the same store. A Codex session can
+search and read your Claude Code history, a Claude Code session can read your
+Codex history, and a Cowork session can read both.
+
+**Deleting is not a secure wipe.** Forgetting and expiry delete files and rows
+the ordinary way, so the bytes can stay on disk until they are overwritten.
+LMDB reuses freed pages, Tantivy drops deleted documents at its next merge,
+and a backup of your disk keeps its own copy.
+
+**What forget cannot reach.**
+
+- The harness's own transcript. Claude Code's and Codex's stay where they
+  keep them, and starmemory only stops indexing them.
+- Cowork's copy of the session in the cloud.
+- The model provider's copy of whatever a session or a summary request sent
+  it.
+- Other sessions that quoted the forgotten one, and their summaries.
+
+**Turning summaries off.** Set `STARMEMORY_SUMMARY_LIMIT=0`, or `off`, where
+Claude Code and Codex run, for example under `env` in `~/.claude/settings.json`
+and in the shell Codex starts from. Summaries already written stay until their
+conversation expires or is forgotten.
 
 ## Configuration
 
