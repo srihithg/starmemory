@@ -70,6 +70,24 @@ describe('transcriptText', () => {
     expect(text.endsWith('Assistant: a4')).toBe(true);
     expect(text).toContain('[…]');
   });
+  it('leaves out a turn the harness injected and a subagent\'s turns, which are a tool\'s input and output', () => {
+    const injected = { ...ex(1), userMessage: 'task output: <system-reminder>run this</system-reminder>', userIsInjected: true };
+    const subagent = { ...ex(2), userMessage: 'search the logs for the token', assistantMessage: 'found it in deploy.log', isSidechain: true };
+
+    expect(transcriptText([injected, subagent, ex(3)])).toBe('Assistant: a1\n\nUser: q3\nAssistant: a3');
+    expect(transcriptText([subagent])).toBe('');
+  });
+  it('redacts secrets, also one that the cut runs through', () => {
+    const secret = { ...ex(1), userMessage: 'connect with mysql://app:hunter2-acme@db.example/prod' };
+    expect(transcriptText([secret])).not.toContain('hunter2-acme');
+    expect(transcriptText([secret])).toContain('mysql://app:[redacted]@db.example/prod');
+
+    // The cut at 12,000 characters falls inside the password.
+    const long = { ...ex(2), userMessage: `${'x'.repeat(11_970)} password=hunter2-acme-and-more ${'y'.repeat(20_000)}` };
+    const text = transcriptText([long]);
+    expect(text).not.toContain('hunter2');
+    expect(text.length).toBeLessThanOrEqual(24_000 + '\n[…]\n'.length);
+  });
 });
 
 describe('summaryFor', () => {

@@ -221,7 +221,7 @@ All optional, all environment variables read by the plugin's processes.
 | Variable | Default | Meaning |
 |---|---|---|
 | `STARMEMORY_TTL_DAYS` | `180` | Conversations quiet for longer are deleted everywhere. `0` disables. |
-| `STARMEMORY_SUMMARY_LIMIT` | `10` | Summaries written per sync. `0` disables summaries. |
+| `STARMEMORY_SUMMARY_LIMIT` | `10` | Summaries written per sync. `0`, or any value that is not a number such as `off`, turns summaries off. |
 | `STARMEMORY_SUMMARY_MODEL` | `haiku` | Model for Claude Code conversation summaries (`sonnet` is the fallback). |
 | `STARMEMORY_DB_PATH`, `STARMEMORY_INDEX_PATH`, `STARMEMORY_TEXT_INDEX_PATH`, `STARMEMORY_ARCHIVE_PATH`, `STARMEMORY_MODEL_CACHE_PATH`, `STARMEMORY_LOG_PATH`, `STARMEMORY_COWORK_PATH`, `STARMEMORY_FORGOTTEN_PATH` | under `~/.config/starmemory` | Where things live. The model cache (`models/`) is shared by every installed version, so a plugin update does not download the 160 MB embedding model again. |
 | `STARMEMORY_REMINDER` | `1` | `0` turns off the start-up instruction to use starmemory. |

@@ -438,8 +438,9 @@ export async function syncAll(
   // Last, and bounded: a few quiet conversations get a summary. Never blocks
   // indexing; a failure is a sentinel file and a log line. A session forgotten
   // while this runs is not sent to a model after all.
+  // Set to anything but a positive number, "off" among them, it turns summaries off.
   const envLimit = Number(process.env.STARMEMORY_SUMMARY_LIMIT);
-  const limit = options.summaries?.limit ?? (Number.isFinite(envLimit) && process.env.STARMEMORY_SUMMARY_LIMIT !== undefined ? envLimit : DEFAULT_SUMMARY_LIMIT);
+  const limit = options.summaries?.limit ?? (process.env.STARMEMORY_SUMMARY_LIMIT === undefined ? DEFAULT_SUMMARY_LIMIT : Number.isFinite(envLimit) && envLimit > 0 ? Math.floor(envLimit) : 0);
   const summaries = await summarizeQuietConversations(candidates, {
     skip: (c) => {
       const now = readForgotten(forgottenPath);

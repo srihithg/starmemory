@@ -2,8 +2,7 @@ export declare const MIN_CODEX_VERSION = "0.130.0";
 export declare function parseCodexVersion(output: string): string | undefined;
 export declare function versionAtLeast(version: string, minimum?: string): boolean;
 export interface CodexSummaryInput {
-    /** The Codex session id, which app-server calls the thread id. */
-    threadId?: string;
+    /** The conversation as text (summaries.ts, transcriptText). */
     transcript: string;
 }
 export interface CodexDeps {

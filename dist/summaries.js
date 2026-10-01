@@ -4,9 +4,9 @@
 // whole rather than after its first two turns. Design doc archive-and-summaries §04.
 import fs from 'node:fs';
 import path from 'node:path';
-import readline from 'node:readline';
-import { archivePathFor, openArchive, summaryPathFor } from './archive.js';
+import { archivePathFor, summaryPathFor } from './archive.js';
 import { parseConversation } from './parser.js';
+import { redactSecrets } from './redact.js';
 export const QUIET_MS = 2 * 60 * 60 * 1000;
 export const DEFAULT_SUMMARY_LIMIT = 10;
 export const SUMMARY_DISPLAY_MAX_CHARS = 300;
@@ -55,26 +55,41 @@ export function selectForSummary(candidates, { now = Date.now(), quietMs = QUIET
         .sort((a, b) => b.sourceMtimeMs - a.sourceMtimeMs)
         .slice(0, limit);
 }
-/** The conversation as plain text for a model that cannot resume the session.
- * Over `maxChars`, keep the opening and the ending: how it started and how it
+/** How far past each cut transcriptText redacts, so that a secret the cut
+ * runs through is seen whole. Longer than any key or token it looks for. */
+const REDACT_MARGIN_CHARS = 8_000;
+/** The conversation as the text a summary is written from: what the person
+ * typed and what the assistant wrote, and nothing a tool took in or gave back.
+ * The parser keeps only text blocks, so tool calls and their results are out
+ * already. Left out here are a user turn the harness injected (a task's
+ * result, a command's output) and a subagent's turns, whose prompt and work
+ * are a tool's input and output. Secrets are redacted (redact.ts). Over
+ * `maxChars`, keep the opening and the ending: how it started and how it
  * ended is what a summary needs most. */
 export function transcriptText(exchanges, maxChars = 24_000) {
-    const full = exchanges.map((e) => `User: ${e.userMessage}\nAssistant: ${e.assistantMessage}`).join('\n\n');
-    if (full.length <= maxChars)
-        return full;
+    const full = exchanges
+        .filter((e) => !e.isSidechain)
+        .map((e) => (e.userIsInjected ? `Assistant: ${e.assistantMessage}` : `User: ${e.userMessage}\nAssistant: ${e.assistantMessage}`))
+        .join('\n\n');
+    if (full.length <= maxChars) {
+        const redacted = redactSecrets(full);
+        if (redacted.length <= maxChars)
+            return redacted;
+    }
     const half = Math.floor(maxChars / 2);
-    return `${full.slice(0, half)}\n[…]\n${full.slice(full.length - half)}`;
+    const head = redactSecrets(full.slice(0, half + REDACT_MARGIN_CHARS)).slice(0, half);
+    const tail = redactSecrets(full.slice(Math.max(0, full.length - half - REDACT_MARGIN_CHARS))).slice(-half);
+    return `${head}\n[…]\n${tail}`;
 }
-/** Asks for the summary inside <summary></summary>. A resumed session tends to
- * treat a bare instruction as one more turn of the conversation and answer in
- * character ("I'm ready to help. What next?"); the tags are how we tell a
- * summary from chatter, see extractSummary. */
+/** Asks for the summary inside <summary></summary>. A model handed a
+ * conversation tends to answer it in character ("I'm ready to help. What
+ * next?") rather than summarise it; the tags are how we tell a summary from
+ * chatter, see extractSummary. */
 export const SUMMARY_PROMPT = 'Stop working on the task. Write a summary of this whole conversation for someone deciding whether to open it: ' +
     'two or three sentences, third person, plain language, saying what problem the user was working on and what was concluded or built. ' +
     'No preamble, no bullet points, no questions back. Output only the summary, wrapped exactly like this: <summary>...</summary>';
-/** The text inside the first <summary> block, or undefined when there is none.
- * Callers decide what "none" means: the resume path treats it as a failed
- * attempt, the plain-text path accepts the raw reply. */
+/** The text inside the first <summary> block, or undefined when there is none,
+ * in which case the summarizers take the raw reply. */
 export function extractSummary(reply) {
     const m = reply.match(/<summary>([\s\S]*?)<\/summary>/i);
     const text = m?.[1].trim();
@@ -90,35 +105,12 @@ export function summaryFor(exchange, archiveRoot) {
         return undefined;
     return state.text;
 }
-/** The `cwd` Claude Code recorded, from the first lines of the transcript. The
- * Agent SDK finds a session to resume under ~/.claude/projects/<encoded cwd>/. */
-async function recordedCwd(archivePath) {
-    const rl = readline.createInterface({ input: openArchive(archivePath), crlfDelay: Infinity });
-    let seen = 0;
-    let found;
-    for await (const line of rl) {
-        if (++seen > 50)
-            break;
-        try {
-            const cwd = JSON.parse(line).cwd;
-            if (typeof cwd === 'string' && cwd) {
-                found = cwd;
-                break;
-            }
-        }
-        catch {
-            // not JSON
-        }
-    }
-    rl.close();
-    return found;
-}
 function defaultSummarizers() {
     // Dynamic imports keep the Agent SDK out of the MCP server's start-up path;
     // only sync ever summarises.
     return {
-        claude: async (input) => (await import('./summarizer-claude.js')).summarizeWithClaude(input),
-        codex: async (input) => (await import('./summarizer-codex.js')).summarizeWithCodex(input),
+        claude: async ({ transcript }) => (await import('./summarizer-claude.js')).summarizeWithClaude({ transcript }),
+        codex: async ({ transcript }) => (await import('./summarizer-codex.js')).summarizeWithCodex({ transcript }),
     };
 }
 export async function summarizeQuietConversations(candidates, opts = {}) {
@@ -142,9 +134,17 @@ export async function summarizeQuietConversations(candidates, opts = {}) {
                 continue;
             }
             const transcript = transcriptText(exchanges);
+            // Nothing but turns transcriptText leaves out, a subagent's for one.
+            if (transcript === '') {
+                if (opts.skip?.(c))
+                    continue;
+                writeSummary(summaryPath, '');
+                result.written++;
+                continue;
+            }
             const text = c.harness === 'codex'
                 ? await summarizers.codex({ threadId: c.sessionId, transcript })
-                : await summarizers.claude({ sessionId: c.sessionId, cwd: await recordedCwd(c.archivePath), transcript });
+                : await summarizers.claude({ sessionId: c.sessionId, transcript });
             // Asked again: the model call takes a while, and a session forgotten in
             // the meantime must not get its summary written after all.
             if (opts.skip?.(c))

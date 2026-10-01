@@ -23,8 +23,9 @@
 # dependencies are not installed, and every path exits 0: a failing hook would
 # complain on every message. STARMEMORY_REMINDER=0 turns it off.
 [ "${STARMEMORY_REMINDER:-1}" = "0" ] && exit 0
-# A summarizer child resumes a session to summarise it (src/summarizer-claude.ts);
-# an instruction to go and use tools would derail it.
+# A summarizer child is handed a conversation to summarise
+# (src/summarizer-claude.ts), and an instruction to go and use tools would
+# derail it.
 [ "${STARMEMORY_SUMMARIZER_GUARD:-}" = "1" ] && exit 0
 
 EVENT="${1:-session-start}"
