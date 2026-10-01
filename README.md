@@ -187,6 +187,9 @@ exchange goes at the next session-start sync rather than at once.
   the Claude app is running, and it does not reach teammates.
 - Inside the Cowork container the SessionStart sync hook does nothing, so no
   dependencies are installed there; only the start-up reminder runs.
+- The plugin's own MCP server, should a cloud container start it, Cowork's or
+  any other, exits at once, since a store there would be thrown away with the
+  container.
 
 ## What happens when
 
