@@ -7,13 +7,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { openStore } from './store.js';
-import { VectorIndex } from './vector-index.js';
+import { defaultArchiveRoot } from './archive.js';
+import { OWNER_ONLY_DIR, OWNER_ONLY_UMASK, tightenOnce } from './owner-only.js';
+import { openStore, type StoreHandle } from './store.js';
+import { VectorIndex, currentIndexFile } from './vector-index.js';
 import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { WRITER_WAIT_MS, syncAll } from './sync.js';
 import { search } from './search.js';
 import { defaultForgottenPath, readForgotten } from './forget.js';
 import { defaultCoworkRoot } from './cowork.js';
+
+// Owner-only from the first file this writes (owner-only.ts).
+process.umask(OWNER_ONLY_UMASK);
 
 const DB_PATH =
   process.env.STARMEMORY_DB_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'store.mdb');
@@ -25,12 +30,28 @@ const TEXT_INDEX_PATH =
   process.env.STARMEMORY_TEXT_INDEX_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'text');
 
 function openEngine() {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true, mode: OWNER_ONLY_DIR });
   const store = openStore(DB_PATH);
   const index = VectorIndex.open(store, INDEX_PATH);
   // Without the compiled addon the engine still works, on the substring fallback.
   const textIndex = isTextIndexAvailable() ? openVersionedTextIndex(TEXT_INDEX_PATH) : undefined;
   return { store, index, textIndex };
+}
+
+/** What sync keeps, for tightenOnce: each place the settings point at, and
+ * all of ~/.config/starmemory when the store is in it, as by default, since
+ * everything in that folder is starmemory's. */
+function dataPaths(store: StoreHandle, textIndexDir: string | undefined): (string | undefined)[] {
+  const dataRoot = path.join(os.homedir(), '.config', 'starmemory');
+  return [
+    ...(path.resolve(path.dirname(DB_PATH)) === path.resolve(dataRoot) ? [dataRoot] : []),
+    DB_PATH,
+    textIndexDir,
+    currentIndexFile(store, INDEX_PATH),
+    defaultArchiveRoot(),
+    defaultCoworkRoot(),
+    defaultForgottenPath(),
+  ];
 }
 
 async function main() {
@@ -45,6 +66,7 @@ async function main() {
     const coworkOnly = rest.includes('--cowork-only');
     const { store, index, textIndex } = openEngine();
     try {
+      tightenOnce(store, dataPaths(store, textIndex?.directory));
       const result = await syncAll(store, index, coworkOnly ? [defaultCoworkRoot()] : undefined, textIndex, {
         writerWaitMs: detached ? WRITER_WAIT_MS : 0,
       });

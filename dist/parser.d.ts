@@ -1,4 +1,7 @@
 import type { Harness, ParsedExchange } from './types.js';
+/** Only consulted for entries that carry no `promptSource` at all, which is how
+ * older transcripts look. */
+export declare const INJECTED_MARKERS: string[];
 export declare function isInjectedUserTurn(entry: {
     promptSource?: string;
     isMeta?: boolean;

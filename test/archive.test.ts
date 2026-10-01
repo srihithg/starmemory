@@ -49,6 +49,19 @@ describe('copyIfChanged', () => {
     await copyIfChanged(src, dest);
     expect(Math.abs(fs.statSync(dest).mtimeMs - then.getTime())).toBeLessThan(1000);
   });
+  it('makes the copy, a whole transcript, owner-only in owner-only folders, whatever the umask', async () => {
+    if (process.platform === 'win32') return; // no modes there
+    const src = path.join(dir, 'src.jsonl'); fs.writeFileSync(src, 'one\n');
+    const dest = path.join(dir, 'root', 'claude', 'p', 'src.jsonl.gz');
+    const saved = process.umask(0o022);
+    try {
+      await copyIfChanged(src, dest);
+    } finally {
+      process.umask(saved);
+    }
+    expect(fs.statSync(dest).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.dirname(dest)).mode & 0o777).toBe(0o700);
+  });
   it('leaves no temp file behind', async () => {
     const src = path.join(dir, 'src.jsonl'); fs.writeFileSync(src, 'one\n');
     await copyIfChanged(src, path.join(dir, 'out', 'src.jsonl.gz'));

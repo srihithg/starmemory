@@ -17,15 +17,19 @@
 #
 # Once per session is a marker file named after the session id, under the
 # user's own home rather than a shared /tmp, where someone else could plant a
-# link where a marker goes. Without a session id or a home there is no
-# marker, so a prompt then prints nothing and session start alone reminds.
+# link where a marker goes, in a folder only the user can open. The marker is
+# made new, never written through a link or over a file already there.
+# Without a session id or a home there is no marker, so a prompt then prints
+# nothing and session start alone reminds.
 # POSIX sh and nothing else, so it costs nothing where the plugin's node
 # dependencies are not installed, and every path exits 0: a failing hook would
 # complain on every message. STARMEMORY_REMINDER=0 turns it off.
 [ "${STARMEMORY_REMINDER:-1}" = "0" ] && exit 0
-# A summarizer child resumes a session to summarise it (src/summarizer-claude.ts);
-# an instruction to go and use tools would derail it.
+# A summarizer child is handed a conversation to summarise
+# (src/summarizer-claude.ts), and an instruction to go and use tools would
+# derail it.
 [ "${STARMEMORY_SUMMARIZER_GUARD:-}" = "1" ] && exit 0
+umask 077
 
 EVENT="${1:-session-start}"
 
@@ -76,8 +80,10 @@ else
   fi
 fi
 
-if [ -n "$MARK" ]; then
-  mkdir -p "$MARKS" 2>/dev/null && : > "$MARK" 2>/dev/null
+if [ -n "$MARK" ] && [ ! -L "$MARK" ] && mkdir -p "$MARKS" 2>/dev/null; then
+  [ -L "$MARKS" ] || chmod 700 "$MARKS" 2>/dev/null
+  # noclobber: the redirection makes a new file, and never empties one there.
+  (set -C; : > "$MARK") 2>/dev/null
   # Markers are empty files. Clear out ones from sessions a fortnight gone.
   find "$MARKS" -type f -mtime +14 -exec rm -f {} + 2>/dev/null
 fi

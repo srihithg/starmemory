@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { addon, isAddonAvailable, type NativeTextDoc, type NativeTextIndex } from './addon.js';
+import { OWNER_ONLY_DIR } from './owner-only.js';
 import { DEFAULT_HARNESS } from './store.js';
 import type { ConversationExchange, Harness } from './types.js';
 
@@ -146,7 +147,7 @@ export class TextIndex {
   ) {}
 
   static open(directory: string): TextIndex {
-    fs.mkdirSync(directory, { recursive: true });
+    fs.mkdirSync(directory, { recursive: true, mode: OWNER_ONLY_DIR });
     return new TextIndex(addon().TextIndex.open(directory), directory);
   }
 

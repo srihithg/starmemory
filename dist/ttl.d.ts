@@ -41,5 +41,7 @@ export declare function removeConversations(store: StoreHandle, textIndex: TextI
     describe: (g: ConversationGroup) => string;
     onRemoved?: (g: ConversationGroup) => void;
 }): RemoveResult;
-/** Remove every conversation whose last activity is older than the TTL. */
+/** Remove every conversation whose last activity is older than the TTL, and
+ * the archive files nothing keeps: copies no row points at, past the TTL by
+ * their own age, and partial copies a crashed sync left, whatever the TTL. */
 export declare function expireOldConversations(store: StoreHandle, textIndex: TextIndex | undefined, { ttlDays, now, archiveRoot, log }: ExpireOptions): ExpireResult;

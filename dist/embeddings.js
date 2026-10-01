@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline, env } from '@huggingface/transformers';
+import { OWNER_ONLY_DIR } from './owner-only.js';
 export const MODEL_ID = 'Xenova/jina-embeddings-v2-base-zh';
 /** Where downloaded models live: `STARMEMORY_MODEL_CACHE_PATH`, else
  * `~/.config/starmemory/models`. transformers.js defaults to a `.cache` inside
@@ -50,7 +51,7 @@ export function seedModelCache(sharedDir, legacyDir, modelId) {
         return false;
     const staging = seedStagingPath(sharedDir, modelId);
     try {
-        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: OWNER_ONLY_DIR });
         fs.cpSync(source, staging, { recursive: true });
         fs.renameSync(staging, target);
         return true;

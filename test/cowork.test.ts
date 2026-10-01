@@ -35,7 +35,7 @@ const entry = (overrides: Partial<Parameters<typeof remember>[1]> = {}) => ({
   session: 'cowork-2026-09-28-76aa87a1',
   title: 'Cowork support for starmemory',
   asked: 'Can starmemory record Cowork sessions?',
-  found: 'Yes, through a remember tool; the desktop app refused the name "cowork-episodic-memory".',
+  found: 'Yes, through a remember tool; the desktop app refused one server name as reserved.',
   project: 'starmemory',
   ...overrides,
 });
@@ -57,7 +57,7 @@ describe('a Cowork record', () => {
     const [header, user, assistant] = lines(file);
     expect(header).toEqual({ type: 'cowork_session', version: 1, session: 'cowork-2026-09-28-76aa87a1', project: 'starmemory', createdAt: '2026-09-28T10:00:00.000Z' });
     expect(user).toMatchObject({ type: 'user', promptSource: 'typed', sessionId: 'cowork-2026-09-28-76aa87a1', message: { role: 'user', content: 'Can starmemory record Cowork sessions?' } });
-    expect(assistant.message.content).toBe('Cowork support for starmemory\n\nYes, through a remember tool; the desktop app refused the name "cowork-episodic-memory".');
+    expect(assistant.message.content).toBe('Cowork support for starmemory\n\nYes, through a remember tool; the desktop app refused one server name as reserved.');
   });
 
   it('is detected as cowork, and so is its gzipped archive copy', async () => {
@@ -71,7 +71,7 @@ describe('a Cowork record', () => {
 
   it('parses into one exchange per entry, tagged cowork, keyed by the session, in the project of its folder', async () => {
     remember(root, entry());
-    const { file } = remember(root, entry({ asked: 'What name did the app accept?', found: 'episode-archive' }));
+    const { file } = remember(root, entry({ asked: 'What name did the app accept?', found: 'starmemserver' }));
 
     const exchanges = await parseConversation(file, 'starmemory', file);
 
@@ -79,7 +79,7 @@ describe('a Cowork record', () => {
       ['cowork', 'starmemory', 'cowork-2026-09-28-76aa87a1', 'Can starmemory record Cowork sessions?'],
       ['cowork', 'starmemory', 'cowork-2026-09-28-76aa87a1', 'What name did the app accept?'],
     ]);
-    expect(exchanges[1].assistantMessage).toBe('Cowork support for starmemory\n\nepisode-archive');
+    expect(exchanges[1].assistantMessage).toBe('Cowork support for starmemory\n\nstarmemserver');
     expect(exchanges.map((e) => [e.lineStart, e.lineEnd])).toEqual([[2, 3], [4, 5]]);
     expect(exchanges.every((e) => e.userIsInjected === false)).toBe(true);
   });

@@ -7,7 +7,7 @@ import readline from 'node:readline';
 const HUMAN_PROMPT_SOURCES = ['typed', 'queued'];
 /** Only consulted for entries that carry no `promptSource` at all, which is how
  * older transcripts look. */
-const INJECTED_MARKERS = [
+export const INJECTED_MARKERS = [
     '<task-notification>',
     '<command-name>',
     '<local-command',

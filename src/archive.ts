@@ -8,6 +8,7 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
+import { OWNER_ONLY_DIR, OWNER_ONLY_FILE } from './owner-only.js';
 import type { Harness } from './types.js';
 
 /** Archive copies are gzipped: a Claude Code transcript shrinks to roughly a
@@ -62,10 +63,12 @@ export async function copyIfChanged(sourcePath: string, archivePath: string): Pr
   } catch {
     // no copy yet
   }
-  fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+  fs.mkdirSync(path.dirname(archivePath), { recursive: true, mode: OWNER_ONLY_DIR });
   const temp = `${archivePath}.${process.pid}.${copyCounter++}.tmp`;
   try {
-    await pipeline(fs.createReadStream(sourcePath), zlib.createGzip(), fs.createWriteStream(temp));
+    // A whole transcript: owner-only, as Claude Code keeps its own, whatever
+    // the umask of the process that copies it.
+    await pipeline(fs.createReadStream(sourcePath), zlib.createGzip(), fs.createWriteStream(temp, { mode: OWNER_ONLY_FILE }));
     fs.utimesSync(temp, src.atime, src.mtime);
     fs.renameSync(temp, archivePath);
   } catch (error) {

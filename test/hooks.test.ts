@@ -177,6 +177,31 @@ describe.skipIf(process.platform === 'win32')('the reminder hook', () => {
     expect(fs.existsSync(path.join(dir, 'tmp'))).toBe(false);
   });
 
+  it('makes its marker new in a folder only the user can open, and never writes through a link', () => {
+    reminder('prompt', 'aaaa-1111');
+    expect(fs.statSync(marks()).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(marks(), 'aaaa-1111')).mode & 0o777).toBe(0o600);
+
+    // A folder an earlier version left open to all is closed.
+    fs.chmodSync(marks(), 0o755);
+    reminder('prompt', 'bbbb-2222');
+    expect(fs.statSync(marks()).mode & 0o777).toBe(0o700);
+
+    // A link planted where a marker goes, to a file and to nothing yet.
+    const victim = path.join(dir, 'victim.txt');
+    fs.writeFileSync(victim, 'untouched');
+    fs.symlinkSync(victim, path.join(marks(), 'cccc-3333'));
+    fs.symlinkSync(path.join(dir, 'planted.txt'), path.join(marks(), 'dddd-4444'));
+    for (const id of ['cccc-3333', 'dddd-4444']) {
+      const r = reminder('session-start', id);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('standing instruction');
+      expect(fs.lstatSync(path.join(marks(), id)).isSymbolicLink()).toBe(true);
+    }
+    expect(fs.readFileSync(victim, 'utf8')).toBe('untouched');
+    expect(fs.existsSync(path.join(dir, 'planted.txt'))).toBe(false);
+  });
+
   it('is silent when turned off, and inside a summarizer child', () => {
     expect(reminder('session-start', 'aaaa-1111', { STARMEMORY_REMINDER: '0' })).toMatchObject({ status: 0, stdout: '' });
     expect(reminder('session-start', 'aaaa-1111', { STARMEMORY_SUMMARIZER_GUARD: '1' })).toMatchObject({ status: 0, stdout: '' });

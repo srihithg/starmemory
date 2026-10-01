@@ -1,6 +1,8 @@
 // Speaks the subset of the codex app-server JSON-RPC that summarizer-codex.ts
 // uses, so the client can be tested on a machine without Codex.
 // FAKE_CODEX_MODE: 'ok' (default) | 'fork-fails' | 'turn-fails' | 'hang'.
+// FAKE_CODEX_LOG: a file each request is appended to, with the folder it came in.
+import fs from 'node:fs';
 import readline from 'node:readline';
 const mode = process.env.FAKE_CODEX_MODE ?? 'ok';
 if (process.argv[2] === '--version') {
@@ -20,6 +22,7 @@ const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   if (!line.trim()) return;
   const msg = JSON.parse(line);
+  if (process.env.FAKE_CODEX_LOG) fs.appendFileSync(process.env.FAKE_CODEX_LOG, `${JSON.stringify({ method: msg.method, params: msg.params, cwd: process.cwd() })}\n`);
   if (msg.method === 'initialize') return out({ id: msg.id, result: { ok: true } });
   if (msg.method === 'initialized') return;
   if (msg.method === 'thread/fork') {
