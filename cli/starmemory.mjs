@@ -14,6 +14,11 @@
 // dependency install, so the child costs nothing.
 if (process.env.STARMEMORY_SUMMARIZER_GUARD === '1') process.exit(0);
 
+// Owner-only from the first file this writes, and in every process it starts,
+// which inherits the mask: the log, the sync's store and archive
+// (src/owner-only.ts).
+process.umask(0o077);
+
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -40,8 +45,13 @@ export function syncLogPath() {
 
 if (background && !detached) {
   const log = syncLogPath();
-  fs.mkdirSync(path.dirname(log), { recursive: true });
-  const fd = fs.openSync(log, 'a');
+  fs.mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
+  const fd = fs.openSync(log, 'a', 0o600);
+  try {
+    fs.fchmodSync(fd, 0o600); // a log an earlier version made readable to all
+  } catch {
+    // a file system without modes, or not a file of this account's
+  }
   fs.writeSync(fd, `[${new Date().toISOString()}] pid ${process.pid}: starting detached sync\n`);
   const child = spawn(
     process.execPath,

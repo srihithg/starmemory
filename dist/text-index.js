@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { addon, isAddonAvailable } from './addon.js';
+import { OWNER_ONLY_DIR } from './owner-only.js';
 import { DEFAULT_HARNESS } from './store.js';
 /** True when the addon has been built. Callers that can still work without BM25
  * (see store.ts's substring fallback) use this instead of catching a throw. */
@@ -123,7 +124,7 @@ export class TextIndex {
         this.directory = directory;
     }
     static open(directory) {
-        fs.mkdirSync(directory, { recursive: true });
+        fs.mkdirSync(directory, { recursive: true, mode: OWNER_ONLY_DIR });
         return new TextIndex(addon().TextIndex.open(directory), directory);
     }
     /** Schema/analyzer generation of the compiled addon. A stored value that no

@@ -29,6 +29,20 @@ describe('the summary file beside a conversation', () => {
     writeSummary(p, '  The user fixed a race.  ');
     expect(readSummaryState(p)).toEqual({ kind: 'valid', text: 'The user fixed a race.' });
   });
+  it('is written owner-only, whatever the umask', () => {
+    if (process.platform === 'win32') return; // no modes there
+    const saved = process.umask(0o022);
+    try {
+      writeSummary(path.join(dir, 'a', 's-summary.txt'), 'The user fixed a race.');
+      writeErrorSentinel(path.join(dir, 'b', 's-summary.txt'), new Error('boom'));
+    } finally {
+      process.umask(saved);
+    }
+    for (const name of ['a', 'b']) {
+      expect(fs.statSync(path.join(dir, name, 's-summary.txt')).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(dir, name)).mode & 0o777).toBe(0o700);
+    }
+  });
 });
 
 describe('selectForSummary', () => {

@@ -104,6 +104,17 @@ describe('desktop-install', () => {
     expect(output).toContain('which holds the same credentials as the config');
   });
 
+  it('keeps the launcher and its record owner-only', () => {
+    if (process.platform === 'win32') return; // no modes there
+    install();
+
+    const desktop = launcherDir(env);
+    expect(fs.statSync(desktop).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(desktop, 'launch.mjs')).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(desktop, 'run-node.sh')).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(path.join(desktop, 'launch.json')).mode & 0o777).toBe(0o600);
+  });
+
   it('records the copy it ran from for the launcher, and follows Claude Code only for a copy Claude Code installed', () => {
     install();
 

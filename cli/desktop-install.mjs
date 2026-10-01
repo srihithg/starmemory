@@ -192,12 +192,13 @@ const LAUNCHER_FILES = [
  * runs the old launcher or the new one, and launch.json goes last, once the
  * files it is for are in place. */
 export function installLauncher(dir, launch) {
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Owner-only, as everything else starmemory keeps: the app runs them as the user.
   for (const [from, to] of LAUNCHER_FILES) {
     const source = path.join(here, from);
-    replaceFile(path.join(dir, to), fs.readFileSync(source), fs.statSync(source).mode & 0o777);
+    replaceFile(path.join(dir, to), fs.readFileSync(source), fs.statSync(source).mode & 0o700);
   }
-  replaceFile(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`, 0o644);
+  replaceFile(path.join(dir, LAUNCH_CONFIG), `${JSON.stringify(launch, null, 2)}\n`, 0o600);
   return path.join(dir, 'launch.mjs');
 }
 

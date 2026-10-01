@@ -251,6 +251,9 @@ function fail(message) {
 
 async function main() {
   const here = path.dirname(fileURLToPath(import.meta.url));
+  // Owner-only from the first file the server writes, its store, records and
+  // archive (src/owner-only.ts): the server is started in this process.
+  process.umask(0o077);
   if (Number(process.versions.node.split('.')[0]) < MIN_NODE_MAJOR) {
     fail(`needs Node ${MIN_NODE_MAJOR} or newer, but the Claude app started ${process.execPath} (${process.version}). Install a newer Node, then quit and reopen the app.`);
   }

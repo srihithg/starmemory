@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline, type FeatureExtractionPipeline, env } from '@huggingface/transformers';
+import { OWNER_ONLY_DIR } from './owner-only.js';
 
 export const MODEL_ID = 'Xenova/jina-embeddings-v2-base-zh';
 
@@ -53,7 +54,7 @@ export function seedModelCache(sharedDir: string, legacyDir: string, modelId: st
   if (fs.existsSync(target) || !fs.existsSync(source)) return false;
   const staging = seedStagingPath(sharedDir, modelId);
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: OWNER_ONLY_DIR });
     fs.cpSync(source, staging, { recursive: true });
     fs.renameSync(staging, target);
     return true;

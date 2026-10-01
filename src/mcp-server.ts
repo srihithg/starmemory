@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
+import { OWNER_ONLY_DIR, OWNER_ONLY_UMASK } from './owner-only.js';
 import { openStore, syncCursorKey } from './store.js';
 import { VectorIndex } from './vector-index.js';
 import { defaultArchiveRoot, readArchive, resolveArchivePath } from './archive.js';
@@ -38,7 +39,10 @@ const INDEX_PATH =
 const TEXT_INDEX_PATH =
   process.env.STARMEMORY_TEXT_INDEX_PATH ?? path.join(os.homedir(), '.config', 'starmemory', 'text');
 
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+// Owner-only from the first file this writes (owner-only.ts): Cowork records,
+// the forgotten list, the store.
+process.umask(OWNER_ONLY_UMASK);
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true, mode: OWNER_ONLY_DIR });
 
 const ARCHIVE_ROOT = defaultArchiveRoot();
 const COWORK_ROOT = defaultCoworkRoot();

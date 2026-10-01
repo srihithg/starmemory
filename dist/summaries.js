@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { archivePathFor, summaryPathFor } from './archive.js';
+import { OWNER_ONLY_DIR, OWNER_ONLY_FILE } from './owner-only.js';
 import { parseConversation } from './parser.js';
 import { redactSecrets } from './redact.js';
 export const QUIET_MS = 2 * 60 * 60 * 1000;
@@ -28,15 +29,15 @@ export function readSummaryState(summaryPath) {
 }
 /** An empty `text` writes the empty sentinel: nothing here to summarise, do not ask again. */
 export function writeSummary(summaryPath, text) {
-    fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+    fs.mkdirSync(path.dirname(summaryPath), { recursive: true, mode: OWNER_ONLY_DIR });
     const trimmed = text.trim();
-    fs.writeFileSync(summaryPath, trimmed === '' ? '' : `${trimmed}\n`, 'utf8');
+    fs.writeFileSync(summaryPath, trimmed === '' ? '' : `${trimmed}\n`, { encoding: 'utf8', mode: OWNER_ONLY_FILE });
 }
 /** Retried on the next sync; the reason is kept so a person can see why. */
 export function writeErrorSentinel(summaryPath, error) {
-    fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+    fs.mkdirSync(path.dirname(summaryPath), { recursive: true, mode: OWNER_ONLY_DIR });
     const message = error instanceof Error ? error.message : String(error);
-    fs.writeFileSync(summaryPath, `${ERROR_PREFIX} ${message.split('\n')[0]}\n`, 'utf8');
+    fs.writeFileSync(summaryPath, `${ERROR_PREFIX} ${message.split('\n')[0]}\n`, { encoding: 'utf8', mode: OWNER_ONLY_FILE });
 }
 /** Quiet for long enough, not yet summarised (or the last try failed), newest
  * first, at most `limit`. Never a Cowork record: the model wrote it as a

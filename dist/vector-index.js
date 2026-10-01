@@ -17,6 +17,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EMBEDDING_DIM } from './embeddings.js';
+import { OWNER_ONLY_DIR } from './owner-only.js';
 import { allVectors } from './store.js';
 import { addon } from './addon.js';
 /** LMDB meta key holding the file name (basename) readers should be on. */
@@ -228,7 +229,7 @@ export class VectorIndex {
         const current = currentIndexFile(store, this.basePath);
         const next = (current ? generationOf(current) ?? -1 : -1) + 1;
         const file = generationPath(this.basePath, next);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: OWNER_ONLY_DIR });
         addon().buildVectorIndex(toNative(this.options), Float64Array.from(ids), flat, file);
         store.meta.putSync(VECTOR_INDEX_FILE_KEY, path.basename(file));
         this.openSearcher(file);
