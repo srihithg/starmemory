@@ -20,7 +20,7 @@ import { OWNER_ONLY_DIR, OWNER_ONLY_UMASK } from './owner-only.js';
 import { openStore, syncCursorKey } from './store.js';
 import { VectorIndex } from './vector-index.js';
 import { defaultArchiveRoot, readArchive, resolveArchivePath } from './archive.js';
-import { formatResults, formatMultiConceptResults } from './format-results.js';
+import { displayPath, expandHome, formatRead, formatResults, formatMultiConceptResults } from './format-results.js';
 import { isTextIndexAvailable, openVersionedTextIndex } from './text-index.js';
 import { search, searchMultipleConcepts } from './search.js';
 import { LIMITS, RefusedError, SESSION_KEY_PATTERN, defaultCoworkRoot, describeRemember, remember } from './cowork.js';
@@ -151,9 +151,11 @@ server.registerTool(
       endLine: z.number().int().min(1).optional(),
     },
   },
-  async ({ path: requested, startLine, endLine }) => {
+  async ({ path: given, startLine, endLine }) => {
+    // Search shows a path under the home folder as ~/..., and it comes back so.
+    const requested = expandHome(given);
     const refused = {
-      content: [{ type: 'text' as const, text: `starmemory reads only the transcripts it indexes and its archive copies of them, and ${requested} is neither.` }],
+      content: [{ type: 'text' as const, text: `starmemory reads only the transcripts it indexes and its archive copies of them, and ${displayPath(requested)} is neither.` }],
       isError: true,
     };
     if (!isReadable(requested, { resolved: false })) return refused;
@@ -172,7 +174,7 @@ server.registerTool(
     }
     if (!fs.existsSync(filePath)) {
       return {
-        content: [{ type: 'text', text: `File not found: ${requested} (the original transcript was cleaned up and no archive copy exists)` }],
+        content: [{ type: 'text', text: `File not found: ${displayPath(requested)} (the original transcript was cleaned up and no archive copy exists)` }],
         isError: true,
       };
     }
@@ -191,7 +193,7 @@ server.registerTool(
     const lines = text.split('\n');
     const start = (startLine ?? 1) - 1;
     const end = endLine ?? lines.length;
-    return { content: [{ type: 'text', text: lines.slice(start, end).join('\n') }] };
+    return { content: [{ type: 'text', text: formatRead(filePath, lines, start, end) }] };
   }
 );
 

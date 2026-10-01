@@ -207,6 +207,12 @@ exchange goes at the next session-start sync rather than at once.
 - **`remember`**: one entry in this Cowork session's record, then a background
   sync. See [Use it in Cowork](#use-it-in-cowork).
 - **`forget`**: takes a session out of the memory and never indexes it again.
+- What `search` and `read` return is marked as recorded session text, to be
+  treated as data and not as instructions. Unicode format characters, such as
+  zero-width and direction marks, are taken out. The opening bracket of a
+  harness tag such as `<system-reminder>` is escaped, however it is disguised,
+  so it reads as text and never as a tag. Paths under your home folder are
+  shown as `~/`, and `read` takes them back that way.
 
 Data lives under `~/.config/starmemory`: `store.mdb` (LMDB, the source of
 truth), `index-v*.g*.hnsw` (vector index, rebuilt from the store),

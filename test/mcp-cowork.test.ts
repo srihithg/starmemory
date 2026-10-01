@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { initEmbeddings } from '../src/embeddings.js';
+import { displayPath } from '../src/format-results.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let dir: string;
@@ -108,7 +109,7 @@ describe('the MCP server in Cowork use', () => {
     const seconds = (Date.now() - started) / 1000;
 
     expect(found.text).toContain(`[lanterns, ${new Date().toISOString().slice(0, 10)}, cowork]`);
-    expect(found.text).toContain(archiveCopy());
+    expect(found.text).toContain(displayPath(archiveCopy()));
     expect(seconds).toBeLessThan(60);
     const semantic = await call('search', { query: 'how often do I need to cut the lamp wick' });
     expect(semantic.text).toContain(session);
